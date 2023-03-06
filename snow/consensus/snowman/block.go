@@ -1,9 +1,10 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package snowman
 
 import (
+	"context"
 	"time"
 
 	"github.com/ava-labs/avalanchego/ids"
@@ -31,7 +32,10 @@ type Block interface {
 	// returned.
 	//
 	// It is guaranteed that the Parent has been successfully verified.
-	Verify() error
+	//
+	// If nil is returned, it is guaranteed that either Accept or Reject will be
+	// called on this block, unless the VM is shut down.
+	Verify(context.Context) error
 
 	// Bytes returns the binary representation of this block.
 	//

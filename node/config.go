@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package node
@@ -12,16 +12,18 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/nat"
 	"github.com/ava-labs/avalanchego/network"
-	"github.com/ava-labs/avalanchego/snow/consensus/avalanche"
 	"github.com/ava-labs/avalanchego/snow/networking/benchlist"
 	"github.com/ava-labs/avalanchego/snow/networking/router"
-	"github.com/ava-labs/avalanchego/snow/networking/sender"
-	"github.com/ava-labs/avalanchego/utils"
+	"github.com/ava-labs/avalanchego/snow/networking/tracker"
+	"github.com/ava-labs/avalanchego/subnets"
+	"github.com/ava-labs/avalanchego/trace"
+	"github.com/ava-labs/avalanchego/utils/crypto/bls"
 	"github.com/ava-labs/avalanchego/utils/dynamicip"
+	"github.com/ava-labs/avalanchego/utils/ips"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/profiler"
+	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/utils/timer"
-	"github.com/ava-labs/avalanchego/vms"
 )
 
 type IPCConfig struct {
@@ -69,24 +71,29 @@ type APIConfig struct {
 }
 
 type IPConfig struct {
-	IP utils.DynamicIPDesc `json:"ip"`
-	// True if we attempted NAT Traversal
+	IPPort           ips.DynamicIPPort `json:"ip"`
+	IPUpdater        dynamicip.Updater `json:"-"`
+	IPResolutionFreq time.Duration     `json:"ipResolutionFrequency"`
+	// True if we attempted NAT traversal
 	AttemptedNATTraversal bool `json:"attemptedNATTraversal"`
 	// Tries to perform network address translation
 	Nat nat.Router `json:"-"`
-	// Dynamic Update duration for IP or NAT traversal
-	DynamicUpdateDuration time.Duration `json:"dynamicUpdateDuration"`
-	// Tries to resolve our IP from an external source
-	DynamicPublicIPResolver dynamicip.Resolver `json:"-"`
 }
 
 type StakingConfig struct {
 	genesis.StakingConfig
 	EnableStaking         bool            `json:"enableStaking"`
 	StakingTLSCert        tls.Certificate `json:"-"`
+	StakingSigningKey     *bls.SecretKey  `json:"-"`
 	DisabledStakingWeight uint64          `json:"disabledStakingWeight"`
 	StakingKeyPath        string          `json:"stakingKeyPath"`
 	StakingCertPath       string          `json:"stakingCertPath"`
+	StakingSignerPath     string          `json:"stakingSignerPath"`
+}
+
+type StateSyncConfig struct {
+	StateSyncIDs []ids.NodeID `json:"stateSyncIDs"`
+	StateSyncIPs []ips.IPPort `json:"stateSyncIPs"`
 }
 
 type BootstrapConfig struct {
@@ -96,7 +103,7 @@ type BootstrapConfig struct {
 	// Max number of times to retry bootstrap before warning the node operator
 	RetryBootstrapWarnFrequency int `json:"retryBootstrapWarnFrequency"`
 
-	// Timeout when connecting to bootstrapping beacons
+	// Timeout before emitting a warn log when connecting to bootstrapping beacons
 	BootstrapBeaconConnectionTimeout time.Duration `json:"bootstrapBeaconConnectionTimeout"`
 
 	// Max number of containers in an ancestors message sent by this node.
@@ -110,8 +117,8 @@ type BootstrapConfig struct {
 	// ancestors while responding to a GetAncestors message
 	BootstrapMaxTimeGetAncestors time.Duration `json:"bootstrapMaxTimeGetAncestors"`
 
-	BootstrapIDs []ids.ShortID  `json:"bootstrapIDs"`
-	BootstrapIPs []utils.IPDesc `json:"bootstrapIPs"`
+	BootstrapIDs []ids.NodeID `json:"bootstrapIDs"`
+	BootstrapIPs []ips.IPPort `json:"bootstrapIPs"`
 }
 
 type DatabaseConfig struct {
@@ -131,6 +138,7 @@ type Config struct {
 	IPConfig            `json:"ipConfig"`
 	StakingConfig       `json:"stakingConfig"`
 	genesis.TxFeeConfig `json:"txFeeConfig"`
+	StateSyncConfig     `json:"stateSyncConfig"`
 	BootstrapConfig     `json:"bootstrapConfig"`
 	DatabaseConfig      `json:"databaseConfig"`
 
@@ -141,39 +149,24 @@ type Config struct {
 	// ID of the network this node should connect to
 	NetworkID uint32 `json:"networkID"`
 
-	// Assertions configuration
-	EnableAssertions bool `json:"enableAssertions"`
-
-	// Crypto configuration
-	EnableCrypto bool `json:"enableCrypto"`
-
 	// Health
 	HealthCheckFreq time.Duration `json:"healthCheckFreq"`
 
 	// Network configuration
 	NetworkConfig network.Config `json:"networkConfig"`
 
-	GossipConfig sender.GossipConfig `json:"gossipConfig"`
-
 	AdaptiveTimeoutConfig timer.AdaptiveTimeoutConfig `json:"adaptiveTimeoutConfig"`
 
-	// Benchlist Configuration
 	BenchlistConfig benchlist.Config `json:"benchlistConfig"`
 
-	// Profiling configurations
 	ProfilerConfig profiler.Config `json:"profilerConfig"`
 
-	// Logging configuration
 	LoggingConfig logging.Config `json:"loggingConfig"`
 
-	// Plugin directory
 	PluginDir string `json:"pluginDir"`
 
 	// File Descriptor Limit
 	FdLimit uint64 `json:"fdLimit"`
-
-	// Consensus configuration
-	ConsensusParams avalanche.Parameters `json:"consensusParams"`
 
 	// Metrics
 	MeterVMEnabled bool `json:"meterVMEnabled"`
@@ -185,18 +178,52 @@ type Config struct {
 	// Gossip a container in the accepted frontier every [ConsensusGossipFrequency]
 	ConsensusGossipFrequency time.Duration `json:"consensusGossipFreq"`
 
-	// Subnet Whitelist
-	WhitelistedSubnets ids.Set `json:"whitelistedSubnets"`
+	TrackedSubnets set.Set[ids.ID] `json:"trackedSubnets"`
 
-	// SubnetConfigs
-	SubnetConfigs map[ids.ID]chains.SubnetConfig `json:"subnetConfigs"`
+	SubnetConfigs map[ids.ID]subnets.Config `json:"subnetConfigs"`
 
-	// ChainConfigs
 	ChainConfigs map[string]chains.ChainConfig `json:"-"`
+	ChainAliases map[ids.ID][]string           `json:"chainAliases"`
 
-	// VM management
-	VMManager vms.Manager `json:"-"`
+	VMAliaser ids.Aliaser `json:"-"`
 
-	// Reset proposerVM height index
-	ResetProposerVMHeightIndex bool `json:"resetProposerVMHeightIndex"`
+	// Halflife to use for the processing requests tracker.
+	// Larger halflife --> usage metrics change more slowly.
+	SystemTrackerProcessingHalflife time.Duration `json:"systemTrackerProcessingHalflife"`
+
+	// Frequency to check the real resource usage of tracked processes.
+	// More frequent checks --> usage metrics are more accurate, but more
+	// expensive to track
+	SystemTrackerFrequency time.Duration `json:"systemTrackerFrequency"`
+
+	// Halflife to use for the cpu tracker.
+	// Larger halflife --> cpu usage metrics change more slowly.
+	SystemTrackerCPUHalflife time.Duration `json:"systemTrackerCPUHalflife"`
+
+	// Halflife to use for the disk tracker.
+	// Larger halflife --> disk usage metrics change more slowly.
+	SystemTrackerDiskHalflife time.Duration `json:"systemTrackerDiskHalflife"`
+
+	CPUTargeterConfig tracker.TargeterConfig `json:"cpuTargeterConfig"`
+
+	DiskTargeterConfig tracker.TargeterConfig `json:"diskTargeterConfig"`
+
+	RequiredAvailableDiskSpace         uint64 `json:"requiredAvailableDiskSpace"`
+	WarningThresholdAvailableDiskSpace uint64 `json:"warningThresholdAvailableDiskSpace"`
+
+	TraceConfig trace.Config `json:"traceConfig"`
+
+	// See comment on [MinPercentConnectedStakeHealthy] in platformvm.Config
+	// TODO: consider moving to subnet config
+	MinPercentConnectedStakeHealthy map[ids.ID]float64 `json:"minPercentConnectedStakeHealthy"`
+
+	// See comment on [UseCurrentHeight] in platformvm.Config
+	UseCurrentHeight bool `json:"useCurrentHeight"`
+
+	// ProvidedFlags contains all the flags set by the user
+	ProvidedFlags map[string]interface{} `json:"-"`
+
+	// ChainDataDir is the root path for per-chain directories where VMs can
+	// write arbitrary data.
+	ChainDataDir string `json:"chainDataDir"`
 }

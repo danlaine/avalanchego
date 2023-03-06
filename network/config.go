@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package network
@@ -10,14 +10,20 @@ import (
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/network/dialer"
+	"github.com/ava-labs/avalanchego/network/peer"
 	"github.com/ava-labs/avalanchego/network/throttling"
+	"github.com/ava-labs/avalanchego/snow/networking/tracker"
 	"github.com/ava-labs/avalanchego/snow/uptime"
 	"github.com/ava-labs/avalanchego/snow/validators"
-	"github.com/ava-labs/avalanchego/utils"
+	"github.com/ava-labs/avalanchego/utils/ips"
+	"github.com/ava-labs/avalanchego/utils/set"
 )
 
 // HealthConfig describes parameters for network layer health checks.
 type HealthConfig struct {
+	// Marks if the health check should be enabled
+	Enabled bool `json:"-"`
+
 	// MinConnectedPeers is the minimum number of peers that the network should
 	// be connected to to be considered healthy.
 	MinConnectedPeers uint `json:"minConnectedPeers"`
@@ -103,16 +109,21 @@ type Config struct {
 	DelayConfig          `json:"delayConfig"`
 	ThrottlerConfig      ThrottlerConfig `json:"throttlerConfig"`
 
+	ProxyEnabled           bool          `json:"proxyEnabled"`
+	ProxyReadHeaderTimeout time.Duration `json:"proxyReadHeaderTimeout"`
+
 	DialerConfig dialer.Config `json:"dialerConfig"`
 	TLSConfig    *tls.Config   `json:"-"`
 
-	Namespace          string              `json:"namespace"`
-	MyNodeID           ids.ShortID         `json:"myNodeID"`
-	MyIP               utils.DynamicIPDesc `json:"myIP"`
-	NetworkID          uint32              `json:"networkID"`
-	MaxClockDifference time.Duration       `json:"maxClockDifference"`
-	PingFrequency      time.Duration       `json:"pingFrequency"`
-	AllowPrivateIPs    bool                `json:"allowPrivateIPs"`
+	TLSKeyLogFile string `json:"tlsKeyLogFile"`
+
+	Namespace          string            `json:"namespace"`
+	MyNodeID           ids.NodeID        `json:"myNodeID"`
+	MyIPPort           ips.DynamicIPPort `json:"myIP"`
+	NetworkID          uint32            `json:"networkID"`
+	MaxClockDifference time.Duration     `json:"maxClockDifference"`
+	PingFrequency      time.Duration     `json:"pingFrequency"`
+	AllowPrivateIPs    bool              `json:"allowPrivateIPs"`
 
 	// CompressionEnabled will compress available outbound messages when set to
 	// true.
@@ -121,12 +132,12 @@ type Config struct {
 	// TLSKey is this node's TLS key that is used to sign IPs.
 	TLSKey crypto.Signer `json:"-"`
 
-	// WhitelistedSubnets of the node.
-	WhitelistedSubnets ids.Set        `json:"whitelistedSubnets"`
-	Beacons            validators.Set `json:"beacons"`
+	// TrackedSubnets of the node.
+	TrackedSubnets set.Set[ids.ID] `json:"-"`
+	Beacons        validators.Set  `json:"-"`
 
 	// Validators are the current validators in the Avalanche network
-	Validators validators.Manager `json:"validators"`
+	Validators validators.Manager `json:"-"`
 
 	UptimeCalculator uptime.Calculator `json:"-"`
 
@@ -136,7 +147,7 @@ type Config struct {
 
 	// UptimeRequirement is the fraction of time a validator must be online and
 	// responsive for us to vote that they should receive a staking reward.
-	UptimeRequirement float64 `json:"uptimeRequirement"`
+	UptimeRequirement float64 `json:"-"`
 
 	// RequireValidatorToConnect require that all connections must have at least
 	// one validator between the 2 peers. This can be useful to enable if the
@@ -156,4 +167,18 @@ type Config struct {
 	// Size, in bytes, of the buffer that we write peer messages into
 	// (there is one buffer per peer)
 	PeerWriteBufferSize int `json:"peerWriteBufferSize"`
+
+	// Tracks the CPU/disk usage caused by processing messages of each peer.
+	ResourceTracker tracker.ResourceTracker `json:"-"`
+
+	// Specifies how much CPU usage each peer can cause before
+	// we rate-limit them.
+	CPUTargeter tracker.Targeter `json:"-"`
+
+	// Specifies how much disk usage each peer can cause before
+	// we rate-limit them.
+	DiskTargeter tracker.Targeter `json:"-"`
+
+	// Tracks which validators have been sent to which peers
+	GossipTracker peer.GossipTracker `json:"-"`
 }

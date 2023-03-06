@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package avalanche
@@ -13,6 +13,7 @@ import (
 	"github.com/ava-labs/avalanchego/snow/engine/avalanche/vertex"
 	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/snow/engine/common/queue"
+	"github.com/ava-labs/avalanchego/snow/validators"
 )
 
 func DefaultConfig() (common.Config, bootstrap.Config, Config) {
@@ -34,17 +35,19 @@ func DefaultConfig() (common.Config, bootstrap.Config, Config) {
 		VM:         bootstrapConfig.VM,
 		Manager:    bootstrapConfig.Manager,
 		Sender:     bootstrapConfig.Sender,
-		Validators: bootstrapConfig.Validators,
+		Validators: validators.NewSet(),
 		Params: avalanche.Parameters{
 			Parameters: snowball.Parameters{
-				K:                     1,
-				Alpha:                 1,
-				BetaVirtuous:          1,
-				BetaRogue:             2,
-				ConcurrentRepolls:     1,
-				OptimalProcessing:     100,
-				MaxOutstandingItems:   1,
-				MaxItemProcessingTime: 1,
+				K:                       1,
+				Alpha:                   1,
+				BetaVirtuous:            1,
+				BetaRogue:               2,
+				ConcurrentRepolls:       1,
+				OptimalProcessing:       100,
+				MaxOutstandingItems:     1,
+				MaxItemProcessingTime:   1,
+				MixedQueryNumPushVdr:    1,
+				MixedQueryNumPushNonVdr: 1,
 			},
 			Parents:   2,
 			BatchSize: 1,

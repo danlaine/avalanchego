@@ -1,15 +1,20 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package health
 
 import (
+	"context"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"go.uber.org/zap"
+
+	"github.com/ava-labs/avalanchego/utils/logging"
 )
 
-var _ Health = &health{}
+var _ Health = (*health)(nil)
 
 // Health defines the full health service interface for registering, reporting
 // and refreshing health checks.
@@ -17,7 +22,7 @@ type Health interface {
 	Registerer
 	Reporter
 
-	Start(freq time.Duration)
+	Start(ctx context.Context, freq time.Duration)
 	Stop()
 }
 
@@ -36,12 +41,13 @@ type Reporter interface {
 }
 
 type health struct {
+	log       logging.Logger
 	readiness *worker
 	health    *worker
 	liveness  *worker
 }
 
-func New(registerer prometheus.Registerer) (Health, error) {
+func New(log logging.Logger, registerer prometheus.Registerer) (Health, error) {
 	readinessWorker, err := newWorker("readiness", registerer)
 	if err != nil {
 		return nil, err
@@ -54,6 +60,7 @@ func New(registerer prometheus.Registerer) (Health, error) {
 
 	livenessWorker, err := newWorker("liveness", registerer)
 	return &health{
+		log:       log,
 		readiness: readinessWorker,
 		health:    healthWorker,
 		liveness:  livenessWorker,
@@ -73,21 +80,39 @@ func (h *health) RegisterLivenessCheck(name string, checker Checker) error {
 }
 
 func (h *health) Readiness() (map[string]Result, bool) {
-	return h.readiness.Results()
+	results, healthy := h.readiness.Results()
+	if !healthy {
+		h.log.Warn("failing readiness check",
+			zap.Reflect("reason", results),
+		)
+	}
+	return results, healthy
 }
 
 func (h *health) Health() (map[string]Result, bool) {
-	return h.health.Results()
+	results, healthy := h.health.Results()
+	if !healthy {
+		h.log.Warn("failing health check",
+			zap.Reflect("reason", results),
+		)
+	}
+	return results, healthy
 }
 
 func (h *health) Liveness() (map[string]Result, bool) {
-	return h.liveness.Results()
+	results, healthy := h.liveness.Results()
+	if !healthy {
+		h.log.Warn("failing liveness check",
+			zap.Reflect("reason", results),
+		)
+	}
+	return results, healthy
 }
 
-func (h *health) Start(freq time.Duration) {
-	h.readiness.Start(freq)
-	h.health.Start(freq)
-	h.liveness.Start(freq)
+func (h *health) Start(ctx context.Context, freq time.Duration) {
+	h.readiness.Start(ctx, freq)
+	h.health.Start(ctx, freq)
+	h.liveness.Start(ctx, freq)
 }
 
 func (h *health) Stop() {

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package message
@@ -10,14 +10,14 @@ import (
 )
 
 var (
-	_ Message = &Tx{}
+	_ Message = (*Tx)(nil)
 
 	errUnexpectedCodecVersion = errors.New("unexpected codec version")
 )
 
 type Message interface {
 	// Handle this message with the correct message handler
-	Handle(handler Handler, nodeID ids.ShortID, requestID uint32) error
+	Handle(handler Handler, nodeID ids.NodeID, requestID uint32) error
 
 	// initialize should be called whenever a message is built or parsed
 	initialize([]byte)
@@ -30,8 +30,13 @@ type Message interface {
 
 type message []byte
 
-func (m *message) initialize(bytes []byte) { *m = bytes }
-func (m *message) Bytes() []byte           { return *m }
+func (m *message) initialize(bytes []byte) {
+	*m = bytes
+}
+
+func (m *message) Bytes() []byte {
+	return *m
+}
 
 type Tx struct {
 	message
@@ -39,7 +44,7 @@ type Tx struct {
 	Tx []byte `serialize:"true"`
 }
 
-func (msg *Tx) Handle(handler Handler, nodeID ids.ShortID, requestID uint32) error {
+func (msg *Tx) Handle(handler Handler, nodeID ids.NodeID, requestID uint32) error {
 	return handler.HandleTx(nodeID, requestID, msg)
 }
 

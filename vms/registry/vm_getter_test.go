@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package registry
@@ -7,13 +7,15 @@ import (
 	"errors"
 	"io/fs"
 	"testing"
-
-	"gotest.tools/assert"
+	"time"
 
 	"github.com/golang/mock/gomock"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/filesystem"
+	"github.com/ava-labs/avalanchego/utils/resource"
 	"github.com/ava-labs/avalanchego/vms"
 )
 
@@ -21,7 +23,7 @@ var (
 	pluginDir = "plugin getter"
 
 	// errors
-	errOops = errors.New("oops")
+	errTest = errors.New("non-nil error")
 
 	// vm names
 	registeredVMName   = "mgj786NP7uDwBCcq6YwThhaN8FLyybkCa4zBWTQbNgmK6k9A6"
@@ -64,10 +66,10 @@ func TestGet_ReadDirFails(t *testing.T) {
 	defer resources.ctrl.Finish()
 
 	// disk read fails
-	resources.mockReader.EXPECT().ReadDir(pluginDir).Times(1).Return(nil, errOops)
+	resources.mockReader.EXPECT().ReadDir(pluginDir).Times(1).Return(nil, errTest)
 
 	_, _, err := resources.getter.Get()
-	assert.Equal(t, errOops, err)
+	require.ErrorIs(t, err, errTest)
 }
 
 // Get should fail if we see an invalid VM id
@@ -77,10 +79,10 @@ func TestGet_InvalidVMName(t *testing.T) {
 
 	resources.mockReader.EXPECT().ReadDir(pluginDir).Times(1).Return(invalidVMs, nil)
 	// didn't find an alias, so we'll try using this invalid vm name
-	resources.mockManager.EXPECT().Lookup("invalid-vm").Times(1).Return(ids.Empty, errOops)
+	resources.mockManager.EXPECT().Lookup("invalid-vm").Times(1).Return(ids.Empty, errTest)
 
 	_, _, err := resources.getter.Get()
-	assert.ErrorContains(t, err, "invalid vmID invalid-vm")
+	require.ErrorIs(t, err, errInvalidVMID)
 }
 
 // Get should fail if we can't get the VM factory
@@ -93,14 +95,16 @@ func TestGet_GetFactoryFails(t *testing.T) {
 	resources.mockReader.EXPECT().ReadDir(pluginDir).Times(1).Return(oneValidVM, nil)
 	resources.mockManager.EXPECT().Lookup(registeredVMName).Times(1).Return(vm, nil)
 	// Getting the factory fails
-	resources.mockManager.EXPECT().GetFactory(vm).Times(1).Return(nil, errOops)
+	resources.mockManager.EXPECT().GetFactory(vm).Times(1).Return(nil, errTest)
 
 	_, _, err := resources.getter.Get()
-	assert.Equal(t, errOops, err)
+	require.ErrorIs(t, err, errTest)
 }
 
 // Get should return the correct registered and unregistered VMs.
 func TestGet_Success(t *testing.T) {
+	require := require.New(t)
+
 	resources := initVMGetterTest(t)
 	defer resources.ctrl.Finish()
 
@@ -118,13 +122,13 @@ func TestGet_Success(t *testing.T) {
 	registeredVMs, unregisteredVMs, err := resources.getter.Get()
 
 	// we should have one registered vm, and one unregistered vm.
-	assert.Equal(t, len(registeredVMs), 1)
-	assert.Check(t, registeredVMs[registeredVMId] != nil)
+	require.Len(registeredVMs, 1)
+	require.NotNil(registeredVMs[registeredVMId])
 
-	assert.Equal(t, len(unregisteredVMs), 1)
-	assert.Check(t, unregisteredVMs[unregisteredVMId] != nil)
+	require.Len(unregisteredVMs, 1)
+	require.NotNil(unregisteredVMs[unregisteredVMId])
 
-	assert.NilError(t, err)
+	require.NoError(err)
 }
 
 type vmGetterTestResources struct {
@@ -145,6 +149,7 @@ func initVMGetterTest(t *testing.T) *vmGetterTestResources {
 			FileReader:      mockReader,
 			Manager:         mockManager,
 			PluginDirectory: pluginDir,
+			CPUTracker:      resource.NewManager("", time.Hour, time.Hour, time.Hour),
 		},
 	)
 

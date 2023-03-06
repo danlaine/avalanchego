@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package keystore
@@ -17,10 +17,9 @@ import (
 	"github.com/ava-labs/avalanchego/database/manager"
 	"github.com/ava-labs/avalanchego/database/prefixdb"
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils/json"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/password"
-
-	jsoncodec "github.com/ava-labs/avalanchego/utils/json"
 )
 
 const (
@@ -35,7 +34,7 @@ var (
 	usersPrefix = []byte("users")
 	bcsPrefix   = []byte("bcs")
 
-	_ Keystore = &keystore{}
+	_ Keystore = (*keystore)(nil)
 )
 
 type Keystore interface {
@@ -122,7 +121,7 @@ func New(log logging.Logger, dbManager manager.Manager) Keystore {
 
 func (ks *keystore) CreateHandler() (http.Handler, error) {
 	newServer := rpc.NewServer()
-	codec := jsoncodec.NewCodec()
+	codec := json.NewCodec()
 	newServer.RegisterCodec(codec, "application/json")
 	newServer.RegisterCodec(codec, "application/json;charset=UTF-8")
 	if err := newServer.RegisterService(&service{ks: ks}, "keystore"); err != nil {
@@ -243,12 +242,12 @@ func (ks *keystore) DeleteUser(username, pw string) error {
 	defer it.Release()
 
 	for it.Next() {
-		if err = dataBatch.Delete(it.Key()); err != nil {
+		if err := dataBatch.Delete(it.Key()); err != nil {
 			return err
 		}
 	}
 
-	if err = it.Error(); err != nil {
+	if err := it.Error(); err != nil {
 		return err
 	}
 

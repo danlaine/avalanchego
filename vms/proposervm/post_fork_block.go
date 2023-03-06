@@ -1,16 +1,18 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package proposervm
 
 import (
+	"context"
+
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/choices"
 	"github.com/ava-labs/avalanchego/snow/consensus/snowman"
 	"github.com/ava-labs/avalanchego/vms/proposervm/block"
 )
 
-var _ Block = &postForkBlock{}
+var _ PostForkBlock = (*postForkBlock)(nil)
 
 type postForkBlock struct {
 	block.SignedBlock
@@ -21,36 +23,48 @@ type postForkBlock struct {
 // 1) Sets this blocks status to Accepted.
 // 2) Persists this block in storage
 // 3) Calls Reject() on siblings of this block and their descendants.
-func (b *postForkBlock) Accept() error {
+func (b *postForkBlock) Accept(ctx context.Context) error {
+	if err := b.acceptOuterBlk(); err != nil {
+		return err
+	}
+	return b.acceptInnerBlk(ctx)
+}
+
+func (b *postForkBlock) acceptOuterBlk() error {
+	// Update in-memory references
+	b.status = choices.Accepted
+	b.vm.lastAcceptedTime = b.Timestamp()
+	b.vm.lastAcceptedHeight = b.Height()
+
 	blkID := b.ID()
+	delete(b.vm.verifiedBlocks, blkID)
+
+	// Persist this block, its height index, and its status
 	if err := b.vm.State.SetLastAccepted(blkID); err != nil {
 		return err
 	}
-
-	// Persist this block, its height index, and its status
-	b.status = choices.Accepted
-	if err := b.vm.storePostForkBlock(b); err != nil {
-		return err
-	}
-
-	delete(b.vm.verifiedBlocks, blkID)
-	b.vm.lastAcceptedTime = b.Timestamp()
-
-	// mark the inner block as accepted and all conflicting inner blocks as
-	// rejected
-	return b.vm.Tree.Accept(b.innerBlk)
-}
-
-func (b *postForkBlock) Reject() error {
-	// We do not reject the inner block here because it may be accepted later
-	delete(b.vm.verifiedBlocks, b.ID())
-
-	// Persist this block with its status
-	b.status = choices.Rejected
 	return b.vm.storePostForkBlock(b)
 }
 
-func (b *postForkBlock) Status() choices.Status { return b.status }
+func (b *postForkBlock) acceptInnerBlk(ctx context.Context) error {
+	// mark the inner block as accepted and all conflicting inner blocks as
+	// rejected
+	return b.vm.Tree.Accept(ctx, b.innerBlk)
+}
+
+func (b *postForkBlock) Reject(context.Context) error {
+	// We do not reject the inner block here because it may be accepted later
+	delete(b.vm.verifiedBlocks, b.ID())
+	b.status = choices.Rejected
+	return nil
+}
+
+func (b *postForkBlock) Status() choices.Status {
+	if b.status == choices.Accepted && b.Height() > b.vm.lastAcceptedHeight {
+		return choices.Processing
+	}
+	return b.status
+}
 
 // Return this block's parent, or a *missing.Block if
 // we don't have the parent.
@@ -60,16 +74,16 @@ func (b *postForkBlock) Parent() ids.ID {
 
 // If Verify() returns nil, Accept() or Reject() will eventually be called on
 // [b] and [b.innerBlk]
-func (b *postForkBlock) Verify() error {
-	parent, err := b.vm.getBlock(b.ParentID())
+func (b *postForkBlock) Verify(ctx context.Context) error {
+	parent, err := b.vm.getBlock(ctx, b.ParentID())
 	if err != nil {
 		return err
 	}
-	return parent.verifyPostForkChild(b)
+	return parent.verifyPostForkChild(ctx, b)
 }
 
 // Return the two options for the block that follows [b]
-func (b *postForkBlock) Options() ([2]snowman.Block, error) {
+func (b *postForkBlock) Options(ctx context.Context) ([2]snowman.Block, error) {
 	innerOracleBlk, ok := b.innerBlk.(snowman.OracleBlock)
 	if !ok {
 		// [b]'s innerBlk isn't an oracle block
@@ -77,7 +91,7 @@ func (b *postForkBlock) Options() ([2]snowman.Block, error) {
 	}
 
 	// The inner block's child options
-	innerOptions, err := innerOracleBlk.Options()
+	innerOptions, err := innerOracleBlk.Options(ctx)
 	if err != nil {
 		return [2]snowman.Block{}, err
 	}
@@ -107,22 +121,23 @@ func (b *postForkBlock) Options() ([2]snowman.Block, error) {
 }
 
 // A post-fork block can never have a pre-fork child
-func (b *postForkBlock) verifyPreForkChild(child *preForkBlock) error {
+func (*postForkBlock) verifyPreForkChild(context.Context, *preForkBlock) error {
 	return errUnsignedChild
 }
 
-func (b *postForkBlock) verifyPostForkChild(child *postForkBlock) error {
+func (b *postForkBlock) verifyPostForkChild(ctx context.Context, child *postForkBlock) error {
 	parentTimestamp := b.Timestamp()
 	parentPChainHeight := b.PChainHeight()
 	return b.postForkCommonComponents.Verify(
+		ctx,
 		parentTimestamp,
 		parentPChainHeight,
 		child,
 	)
 }
 
-func (b *postForkBlock) verifyPostForkOption(child *postForkOption) error {
-	if err := verifyIsOracleBlock(b.innerBlk); err != nil {
+func (b *postForkBlock) verifyPostForkOption(ctx context.Context, child *postForkOption) error {
+	if err := verifyIsOracleBlock(ctx, b.innerBlk); err != nil {
 		return err
 	}
 
@@ -133,19 +148,20 @@ func (b *postForkBlock) verifyPostForkOption(child *postForkOption) error {
 		return errInnerParentMismatch
 	}
 
-	return child.vm.verifyAndRecordInnerBlk(child)
+	return child.vm.verifyAndRecordInnerBlk(ctx, nil, child)
 }
 
 // Return the child (a *postForkBlock) of this block
-func (b *postForkBlock) buildChild() (Block, error) {
+func (b *postForkBlock) buildChild(ctx context.Context) (Block, error) {
 	return b.postForkCommonComponents.buildChild(
+		ctx,
 		b.ID(),
 		b.Timestamp(),
 		b.PChainHeight(),
 	)
 }
 
-func (b *postForkBlock) pChainHeight() (uint64, error) {
+func (b *postForkBlock) pChainHeight(context.Context) (uint64, error) {
 	return b.PChainHeight(), nil
 }
 

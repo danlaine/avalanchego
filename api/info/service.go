@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package info
@@ -17,41 +17,44 @@ import (
 	"github.com/ava-labs/avalanchego/snow/engine/common"
 	"github.com/ava-labs/avalanchego/snow/networking/benchlist"
 	"github.com/ava-labs/avalanchego/snow/validators"
-	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/constants"
+	"github.com/ava-labs/avalanchego/utils/ips"
 	"github.com/ava-labs/avalanchego/utils/json"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/version"
 	"github.com/ava-labs/avalanchego/vms"
+	"github.com/ava-labs/avalanchego/vms/platformvm/signer"
 )
 
-var (
-	errNoChainProvided = errors.New("argument 'chain' not given")
-	errNotValidator    = errors.New("this is not a validator node")
-)
+var errNoChainProvided = errors.New("argument 'chain' not given")
 
 // Info is the API service for unprivileged info on a node
 type Info struct {
 	Parameters
-	log           logging.Logger
-	myIP          *utils.DynamicIPDesc
-	networking    network.Network
-	chainManager  chains.Manager
-	vmManager     vms.Manager
-	versionParser version.ApplicationParser
-	validators    validators.Set
-	benchlist     benchlist.Manager
+	log          logging.Logger
+	myIP         ips.DynamicIPPort
+	networking   network.Network
+	chainManager chains.Manager
+	vmManager    vms.Manager
+	validators   validators.Set
+	benchlist    benchlist.Manager
 }
 
 type Parameters struct {
-	Version               version.Application
-	NodeID                ids.ShortID
-	NetworkID             uint32
-	TxFee                 uint64
-	CreateAssetTxFee      uint64
-	CreateSubnetTxFee     uint64
-	CreateBlockchainTxFee uint64
-	VMManager             vms.Manager
+	Version                       *version.Application
+	NodeID                        ids.NodeID
+	NodePOP                       *signer.ProofOfPossession
+	NetworkID                     uint32
+	TxFee                         uint64
+	CreateAssetTxFee              uint64
+	CreateSubnetTxFee             uint64
+	TransformSubnetTxFee          uint64
+	CreateBlockchainTxFee         uint64
+	AddPrimaryNetworkValidatorFee uint64
+	AddPrimaryNetworkDelegatorFee uint64
+	AddSubnetValidatorFee         uint64
+	AddSubnetDelegatorFee         uint64
+	VMManager                     vms.Manager
 }
 
 // NewService returns a new admin API service
@@ -60,9 +63,8 @@ func NewService(
 	log logging.Logger,
 	chainManager chains.Manager,
 	vmManager vms.Manager,
-	myIP *utils.DynamicIPDesc,
+	myIP ips.DynamicIPPort,
 	network network.Network,
-	versionParser version.ApplicationParser,
 	validators validators.Set,
 	benchlist benchlist.Manager,
 ) (*common.HTTPHandler, error) {
@@ -71,40 +73,44 @@ func NewService(
 	newServer.RegisterCodec(codec, "application/json")
 	newServer.RegisterCodec(codec, "application/json;charset=UTF-8")
 	if err := newServer.RegisterService(&Info{
-		Parameters:    parameters,
-		log:           log,
-		chainManager:  chainManager,
-		vmManager:     vmManager,
-		myIP:          myIP,
-		networking:    network,
-		versionParser: versionParser,
-		validators:    validators,
-		benchlist:     benchlist,
+		Parameters:   parameters,
+		log:          log,
+		chainManager: chainManager,
+		vmManager:    vmManager,
+		myIP:         myIP,
+		networking:   network,
+		validators:   validators,
+		benchlist:    benchlist,
 	}, "info"); err != nil {
 		return nil, err
 	}
-	return &common.HTTPHandler{Handler: newServer}, nil
+	return &common.HTTPHandler{
+		LockOptions: common.NoLock,
+		Handler:     newServer,
+	}, nil
 }
 
 // GetNodeVersionReply are the results from calling GetNodeVersion
 type GetNodeVersionReply struct {
-	Version         string            `json:"version"`
-	DatabaseVersion string            `json:"databaseVersion"`
-	GitCommit       string            `json:"gitCommit"`
-	VMVersions      map[string]string `json:"vmVersions"`
+	Version            string            `json:"version"`
+	DatabaseVersion    string            `json:"databaseVersion"`
+	RPCProtocolVersion json.Uint32       `json:"rpcProtocolVersion"`
+	GitCommit          string            `json:"gitCommit"`
+	VMVersions         map[string]string `json:"vmVersions"`
 }
 
 // GetNodeVersion returns the version this node is running
-func (service *Info) GetNodeVersion(_ *http.Request, _ *struct{}, reply *GetNodeVersionReply) error {
-	service.log.Debug("Info: GetNodeVersion called")
+func (i *Info) GetNodeVersion(_ *http.Request, _ *struct{}, reply *GetNodeVersionReply) error {
+	i.log.Debug("Info: GetNodeVersion called")
 
-	vmVersions, err := service.vmManager.Versions()
+	vmVersions, err := i.vmManager.Versions()
 	if err != nil {
 		return err
 	}
 
-	reply.Version = service.Version.String()
+	reply.Version = i.Version.String()
 	reply.DatabaseVersion = version.CurrentDatabase.String()
+	reply.RPCProtocolVersion = json.Uint32(version.RPCChainVMProtocol)
 	reply.GitCommit = version.GitCommit
 	reply.VMVersions = vmVersions
 	return nil
@@ -112,14 +118,16 @@ func (service *Info) GetNodeVersion(_ *http.Request, _ *struct{}, reply *GetNode
 
 // GetNodeIDReply are the results from calling GetNodeID
 type GetNodeIDReply struct {
-	NodeID string `json:"nodeID"`
+	NodeID  ids.NodeID                `json:"nodeID"`
+	NodePOP *signer.ProofOfPossession `json:"nodePOP"`
 }
 
 // GetNodeID returns the node ID of this node
-func (service *Info) GetNodeID(_ *http.Request, _ *struct{}, reply *GetNodeIDReply) error {
-	service.log.Debug("Info: GetNodeID called")
+func (i *Info) GetNodeID(_ *http.Request, _ *struct{}, reply *GetNodeIDReply) error {
+	i.log.Debug("Info: GetNodeID called")
 
-	reply.NodeID = service.NodeID.PrefixedString(constants.NodeIDPrefix)
+	reply.NodeID = i.NodeID
+	reply.NodePOP = i.NodePOP
 	return nil
 }
 
@@ -134,18 +142,18 @@ type GetNodeIPReply struct {
 }
 
 // GetNodeIP returns the IP of this node
-func (service *Info) GetNodeIP(_ *http.Request, _ *struct{}, reply *GetNodeIPReply) error {
-	service.log.Debug("Info: GetNodeIP called")
+func (i *Info) GetNodeIP(_ *http.Request, _ *struct{}, reply *GetNodeIPReply) error {
+	i.log.Debug("Info: GetNodeIP called")
 
-	reply.IP = service.myIP.IP().String()
+	reply.IP = i.myIP.IPPort().String()
 	return nil
 }
 
 // GetNetworkID returns the network ID this node is running on
-func (service *Info) GetNetworkID(_ *http.Request, _ *struct{}, reply *GetNetworkIDReply) error {
-	service.log.Debug("Info: GetNetworkID called")
+func (i *Info) GetNetworkID(_ *http.Request, _ *struct{}, reply *GetNetworkIDReply) error {
+	i.log.Debug("Info: GetNetworkID called")
 
-	reply.NetworkID = json.Uint32(service.NetworkID)
+	reply.NetworkID = json.Uint32(i.NetworkID)
 	return nil
 }
 
@@ -155,10 +163,10 @@ type GetNetworkNameReply struct {
 }
 
 // GetNetworkName returns the network name this node is running on
-func (service *Info) GetNetworkName(_ *http.Request, _ *struct{}, reply *GetNetworkNameReply) error {
-	service.log.Debug("Info: GetNetworkName called")
+func (i *Info) GetNetworkName(_ *http.Request, _ *struct{}, reply *GetNetworkNameReply) error {
+	i.log.Debug("Info: GetNetworkName called")
 
-	reply.NetworkName = constants.NetworkName(service.NetworkID)
+	reply.NetworkName = constants.NetworkName(i.NetworkID)
 	return nil
 }
 
@@ -173,17 +181,17 @@ type GetBlockchainIDReply struct {
 }
 
 // GetBlockchainID returns the blockchain ID that resolves the alias that was supplied
-func (service *Info) GetBlockchainID(_ *http.Request, args *GetBlockchainIDArgs, reply *GetBlockchainIDReply) error {
-	service.log.Debug("Info: GetBlockchainID called")
+func (i *Info) GetBlockchainID(_ *http.Request, args *GetBlockchainIDArgs, reply *GetBlockchainIDReply) error {
+	i.log.Debug("Info: GetBlockchainID called")
 
-	bID, err := service.chainManager.Lookup(args.Alias)
+	bID, err := i.chainManager.Lookup(args.Alias)
 	reply.BlockchainID = bID
 	return err
 }
 
 // PeersArgs are the arguments for calling Peers
 type PeersArgs struct {
-	NodeIDs []string `json:"nodeIDs"`
+	NodeIDs []ids.NodeID `json:"nodeIDs"`
 }
 
 type Peer struct {
@@ -201,28 +209,15 @@ type PeersReply struct {
 }
 
 // Peers returns the list of current validators
-func (service *Info) Peers(_ *http.Request, args *PeersArgs, reply *PeersReply) error {
-	service.log.Debug("Info: Peers called")
-	nodeIDs := make([]ids.ShortID, 0, len(args.NodeIDs))
-	for _, nodeID := range args.NodeIDs {
-		nID, err := ids.ShortFromPrefixedString(nodeID, constants.NodeIDPrefix)
-		if err != nil {
-			return err
-		}
-		nodeIDs = append(nodeIDs, nID)
-	}
+func (i *Info) Peers(_ *http.Request, args *PeersArgs, reply *PeersReply) error {
+	i.log.Debug("Info: Peers called")
 
-	peers := service.networking.PeerInfo(nodeIDs)
+	peers := i.networking.PeerInfo(args.NodeIDs)
 	peerInfo := make([]Peer, len(peers))
-	for i, peer := range peers {
-		nodeID, err := ids.ShortFromPrefixedString(peer.ID, constants.NodeIDPrefix)
-		if err != nil {
-			return err
-		}
-
-		peerInfo[i] = Peer{
+	for index, peer := range peers {
+		peerInfo[index] = Peer{
 			Info:    peer,
-			Benched: service.benchlist.GetBenched(nodeID),
+			Benched: i.benchlist.GetBenched(peer.ID),
 		}
 	}
 
@@ -246,17 +241,19 @@ type IsBootstrappedResponse struct {
 
 // IsBootstrapped returns nil and sets [reply.IsBootstrapped] == true iff [args.Chain] exists and is done bootstrapping
 // Returns an error if the chain doesn't exist
-func (service *Info) IsBootstrapped(_ *http.Request, args *IsBootstrappedArgs, reply *IsBootstrappedResponse) error {
-	service.log.Debug("Info: IsBootstrapped called with chain: %s", args.Chain)
+func (i *Info) IsBootstrapped(_ *http.Request, args *IsBootstrappedArgs, reply *IsBootstrappedResponse) error {
+	i.log.Debug("Info: IsBootstrapped called",
+		logging.UserString("chain", args.Chain),
+	)
 
 	if args.Chain == "" {
 		return errNoChainProvided
 	}
-	chainID, err := service.chainManager.Lookup(args.Chain)
+	chainID, err := i.chainManager.Lookup(args.Chain)
 	if err != nil {
 		return fmt.Errorf("there is no chain with alias/ID '%s'", args.Chain)
 	}
-	reply.IsBootstrapped = service.chainManager.IsBootstrapped(chainID)
+	reply.IsBootstrapped = i.chainManager.IsBootstrapped(chainID)
 	return nil
 }
 
@@ -277,11 +274,16 @@ type UptimeResponse struct {
 	WeightedAveragePercentage json.Float64 `json:"weightedAveragePercentage"`
 }
 
-func (service *Info) Uptime(_ *http.Request, _ *struct{}, reply *UptimeResponse) error {
-	service.log.Debug("Info: Uptime called")
-	result, isValidator := service.networking.NodeUptime()
-	if !isValidator {
-		return errNotValidator
+type UptimeRequest struct {
+	// if omitted, defaults to primary network
+	SubnetID ids.ID `json:"subnetID"`
+}
+
+func (i *Info) Uptime(_ *http.Request, args *UptimeRequest, reply *UptimeResponse) error {
+	i.log.Debug("Info: Uptime called")
+	result, err := i.networking.NodeUptime(args.SubnetID)
+	if err != nil {
+		return fmt.Errorf("couldn't get node uptime: %w", err)
 	}
 	reply.WeightedAveragePercentage = json.Float64(result.WeightedAveragePercentage)
 	reply.RewardingStakePercentage = json.Float64(result.RewardingStakePercentage)
@@ -289,21 +291,28 @@ func (service *Info) Uptime(_ *http.Request, _ *struct{}, reply *UptimeResponse)
 }
 
 type GetTxFeeResponse struct {
-	TxFee json.Uint64 `json:"txFee"`
-	// TODO: remove [CreationTxFee] after enough time for dependencies to update
-	CreationTxFee         json.Uint64 `json:"creationTxFee"`
-	CreateAssetTxFee      json.Uint64 `json:"createAssetTxFee"`
-	CreateSubnetTxFee     json.Uint64 `json:"createSubnetTxFee"`
-	CreateBlockchainTxFee json.Uint64 `json:"createBlockchainTxFee"`
+	TxFee                         json.Uint64 `json:"txFee"`
+	CreateAssetTxFee              json.Uint64 `json:"createAssetTxFee"`
+	CreateSubnetTxFee             json.Uint64 `json:"createSubnetTxFee"`
+	TransformSubnetTxFee          json.Uint64 `json:"transformSubnetTxFee"`
+	CreateBlockchainTxFee         json.Uint64 `json:"createBlockchainTxFee"`
+	AddPrimaryNetworkValidatorFee json.Uint64 `json:"addPrimaryNetworkValidatorFee"`
+	AddPrimaryNetworkDelegatorFee json.Uint64 `json:"addPrimaryNetworkDelegatorFee"`
+	AddSubnetValidatorFee         json.Uint64 `json:"addSubnetValidatorFee"`
+	AddSubnetDelegatorFee         json.Uint64 `json:"addSubnetDelegatorFee"`
 }
 
 // GetTxFee returns the transaction fee in nAVAX.
-func (service *Info) GetTxFee(_ *http.Request, args *struct{}, reply *GetTxFeeResponse) error {
-	reply.TxFee = json.Uint64(service.TxFee)
-	reply.CreationTxFee = json.Uint64(service.CreateAssetTxFee)
-	reply.CreateAssetTxFee = json.Uint64(service.CreateAssetTxFee)
-	reply.CreateSubnetTxFee = json.Uint64(service.CreateSubnetTxFee)
-	reply.CreateBlockchainTxFee = json.Uint64(service.CreateBlockchainTxFee)
+func (i *Info) GetTxFee(_ *http.Request, _ *struct{}, reply *GetTxFeeResponse) error {
+	reply.TxFee = json.Uint64(i.TxFee)
+	reply.CreateAssetTxFee = json.Uint64(i.CreateAssetTxFee)
+	reply.CreateSubnetTxFee = json.Uint64(i.CreateSubnetTxFee)
+	reply.TransformSubnetTxFee = json.Uint64(i.TransformSubnetTxFee)
+	reply.CreateBlockchainTxFee = json.Uint64(i.CreateBlockchainTxFee)
+	reply.AddPrimaryNetworkValidatorFee = json.Uint64(i.AddPrimaryNetworkValidatorFee)
+	reply.AddPrimaryNetworkDelegatorFee = json.Uint64(i.AddPrimaryNetworkDelegatorFee)
+	reply.AddSubnetValidatorFee = json.Uint64(i.AddSubnetValidatorFee)
+	reply.AddSubnetDelegatorFee = json.Uint64(i.AddSubnetDelegatorFee)
 	return nil
 }
 
@@ -313,15 +322,15 @@ type GetVMsReply struct {
 }
 
 // GetVMs lists the virtual machines installed on the node
-func (service *Info) GetVMs(_ *http.Request, _ *struct{}, reply *GetVMsReply) error {
-	service.log.Debug("Info: GetVMs called")
+func (i *Info) GetVMs(_ *http.Request, _ *struct{}, reply *GetVMsReply) error {
+	i.log.Debug("Info: GetVMs called")
 
 	// Fetch the VMs registered on this node.
-	vmIDs, err := service.VMManager.ListFactories()
+	vmIDs, err := i.VMManager.ListFactories()
 	if err != nil {
 		return err
 	}
 
-	reply.VMs, err = ids.GetRelevantAliases(service.VMManager, vmIDs)
+	reply.VMs, err = ids.GetRelevantAliases(i.VMManager, vmIDs)
 	return err
 }

@@ -1,15 +1,17 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package avm
 
 import (
 	"container/list"
+	"context"
 	"testing"
 
 	"github.com/ava-labs/avalanchego/api"
 	"github.com/ava-labs/avalanchego/chains/atomic"
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/vms/avm/txs"
 	"github.com/ava-labs/avalanchego/vms/components/keystore"
 )
 
@@ -18,11 +20,11 @@ import (
 // 2) the VM
 // 3) The wallet service that wraps the VM
 // 4) atomic memory to use in tests
-func setupWS(t *testing.T, isAVAXAsset bool) ([]byte, *VM, *WalletService, *atomic.Memory, *Tx) {
+func setupWS(t *testing.T, isAVAXAsset bool) ([]byte, *VM, *WalletService, *atomic.Memory, *txs.Tx) {
 	var genesisBytes []byte
 	var vm *VM
 	var m *atomic.Memory
-	var genesisTx *Tx
+	var genesisTx *txs.Tx
 	if isAVAXAsset {
 		genesisBytes, _, vm, m = GenesisVM(t)
 		genesisTx = GetAVAXTxFromGenesisTest(genesisBytes, t)
@@ -40,7 +42,7 @@ func setupWS(t *testing.T, isAVAXAsset bool) ([]byte, *VM, *WalletService, *atom
 // 2) the VM
 // 3) The wallet service that wraps the VM
 // 4) atomic memory to use in tests
-func setupWSWithKeys(t *testing.T, isAVAXAsset bool) ([]byte, *VM, *WalletService, *atomic.Memory, *Tx) {
+func setupWSWithKeys(t *testing.T, isAVAXAsset bool) ([]byte, *VM, *WalletService, *atomic.Memory, *txs.Tx) {
 	genesisBytes, vm, ws, m, tx := setupWS(t, isAVAXAsset)
 
 	// Import the initially funded private keys
@@ -64,7 +66,7 @@ func TestWalletService_SendMultiple(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, vm, ws, _, genesisTx := setupWSWithKeys(t, tc.avaxAsset)
 			defer func() {
-				if err := vm.Shutdown(); err != nil {
+				if err := vm.Shutdown(context.Background()); err != nil {
 					t.Fatal(err)
 				}
 				vm.ctx.Lock.Unlock()
@@ -122,7 +124,7 @@ func TestWalletService_SendMultiple(t *testing.T) {
 				t.Fatal("Transaction ID returned by SendMultiple does not match the transaction found in vm's pending transactions")
 			}
 
-			if _, err = vm.GetTx(reply.TxID); err != nil {
+			if _, err := vm.GetTx(context.Background(), reply.TxID); err != nil {
 				t.Fatalf("Failed to retrieve created transaction: %s", err)
 			}
 		})

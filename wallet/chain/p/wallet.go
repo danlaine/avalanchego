@@ -1,15 +1,18 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package p
 
 import (
 	"errors"
+	"time"
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/vms/components/avax"
 	"github.com/ava-labs/avalanchego/vms/platformvm"
+	"github.com/ava-labs/avalanchego/vms/platformvm/signer"
 	"github.com/ava-labs/avalanchego/vms/platformvm/status"
+	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
 	"github.com/ava-labs/avalanchego/vms/secp256k1fx"
 	"github.com/ava-labs/avalanchego/wallet/subnet/primary/common"
 )
@@ -17,7 +20,7 @@ import (
 var (
 	errNotCommitted = errors.New("not committed")
 
-	_ Wallet = &wallet{}
+	_ Wallet = (*wallet)(nil)
 )
 
 type Wallet interface {
@@ -43,15 +46,15 @@ type Wallet interface {
 	// IssueAddValidatorTx creates, signs, and issues a new validator of the
 	// primary network.
 	//
-	// - [validator] specifies all the details of the validation period such as
-	//   the startTime, endTime, stake weight, and nodeID.
+	// - [vdr] specifies all the details of the validation period such as the
+	//   startTime, endTime, stake weight, and nodeID.
 	// - [rewardsOwner] specifies the owner of all the rewards this validator
 	//   may accrue during its validation period.
 	// - [shares] specifies the fraction (out of 1,000,000) that this validator
 	//   will take from delegation rewards. If 1,000,000 is provided, 100% of
 	//   the delegation reward will be sent to the validator's [rewardsOwner].
 	IssueAddValidatorTx(
-		validator *platformvm.Validator,
+		vdr *txs.Validator,
 		rewardsOwner *secp256k1fx.OutputOwners,
 		shares uint32,
 		options ...common.Option,
@@ -60,22 +63,32 @@ type Wallet interface {
 	// IssueAddSubnetValidatorTx creates, signs, and issues a new validator of a
 	// subnet.
 	//
-	// - [validator] specifies all the details of the validation period such as
-	//   the startTime, endTime, sampling weight, nodeID, and subnetID.
+	// - [vdr] specifies all the details of the validation period such as the
+	//   startTime, endTime, sampling weight, nodeID, and subnetID.
 	IssueAddSubnetValidatorTx(
-		validator *platformvm.SubnetValidator,
+		vdr *txs.SubnetValidator,
+		options ...common.Option,
+	) (ids.ID, error)
+
+	// IssueAddSubnetValidatorTx creates, signs, and issues a transaction that
+	// removes a validator of a subnet.
+	//
+	// - [nodeID] is the validator being removed from [subnetID].
+	IssueRemoveSubnetValidatorTx(
+		nodeID ids.NodeID,
+		subnetID ids.ID,
 		options ...common.Option,
 	) (ids.ID, error)
 
 	// IssueAddDelegatorTx creates, signs, and issues a new delegator to a
 	// validator on the primary network.
 	//
-	// - [validator] specifies all the details of the delegation period such as
-	//   the startTime, endTime, stake weight, and validator's nodeID.
+	// - [vdr] specifies all the details of the delegation period such as the
+	//   startTime, endTime, stake weight, and validator's nodeID.
 	// - [rewardsOwner] specifies the owner of all the rewards this delegator
 	//   may accrue at the end of its delegation period.
 	IssueAddDelegatorTx(
-		validator *platformvm.Validator,
+		vdr *txs.Validator,
 		rewardsOwner *secp256k1fx.OutputOwners,
 		options ...common.Option,
 	) (ids.ID, error)
@@ -130,15 +143,103 @@ type Wallet interface {
 		options ...common.Option,
 	) (ids.ID, error)
 
+	// IssueTransformSubnetTx creates a transform subnet transaction that attempts
+	// to convert the provided [subnetID] from a permissioned subnet to a
+	// permissionless subnet. This transaction will convert
+	// [maxSupply] - [initialSupply] of [assetID] to staking rewards.
+	//
+	// - [subnetID] specifies the subnet to transform.
+	// - [assetID] specifies the asset to use to reward stakers on the subnet.
+	// - [initialSupply] is the amount of [assetID] that will be in circulation
+	//   after this transaction is accepted.
+	// - [maxSupply] is the maximum total amount of [assetID] that should ever
+	//   exist.
+	// - [minConsumptionRate] is the rate that a staker will receive rewards
+	//   if they stake with a duration of 0.
+	// - [maxConsumptionRate] is the maximum rate that staking rewards should be
+	//   consumed from the reward pool per year.
+	// - [minValidatorStake] is the minimum amount of funds required to become a
+	//   validator.
+	// - [maxValidatorStake] is the maximum amount of funds a single validator
+	//   can be allocated, including delegated funds.
+	// - [minStakeDuration] is the minimum number of seconds a staker can stake
+	//   for.
+	// - [maxStakeDuration] is the maximum number of seconds a staker can stake
+	//   for.
+	// - [minValidatorStake] is the minimum amount of funds required to become a
+	//   delegator.
+	// - [maxValidatorWeightFactor] is the factor which calculates the maximum
+	//   amount of delegation a validator can receive. A value of 1 effectively
+	//   disables delegation.
+	// - [uptimeRequirement] is the minimum percentage a validator must be
+	//   online and responsive to receive a reward.
+	IssueTransformSubnetTx(
+		subnetID ids.ID,
+		assetID ids.ID,
+		initialSupply uint64,
+		maxSupply uint64,
+		minConsumptionRate uint64,
+		maxConsumptionRate uint64,
+		minValidatorStake uint64,
+		maxValidatorStake uint64,
+		minStakeDuration time.Duration,
+		maxStakeDuration time.Duration,
+		minDelegationFee uint32,
+		minDelegatorStake uint64,
+		maxValidatorWeightFactor byte,
+		uptimeRequirement uint32,
+		options ...common.Option,
+	) (ids.ID, error)
+
+	// IssueAddPermissionlessValidatorTx creates, signs, and issues a new
+	// validator of the specified subnet.
+	//
+	// - [vdr] specifies all the details of the validation period such as the
+	//   subnetID, startTime, endTime, stake weight, and nodeID.
+	// - [signer] if the subnetID is the primary network, this is the BLS key
+	//   for this validator. Otherwise, this value should be the empty signer.
+	// - [assetID] specifies the asset to stake.
+	// - [validationRewardsOwner] specifies the owner of all the rewards this
+	//   validator earns for its validation period.
+	// - [delegationRewardsOwner] specifies the owner of all the rewards this
+	//   validator earns for delegations during its validation period.
+	// - [shares] specifies the fraction (out of 1,000,000) that this validator
+	//   will take from delegation rewards. If 1,000,000 is provided, 100% of
+	//   the delegation reward will be sent to the validator's [rewardsOwner].
+	IssueAddPermissionlessValidatorTx(
+		vdr *txs.SubnetValidator,
+		signer signer.Signer,
+		assetID ids.ID,
+		validationRewardsOwner *secp256k1fx.OutputOwners,
+		delegationRewardsOwner *secp256k1fx.OutputOwners,
+		shares uint32,
+		options ...common.Option,
+	) (ids.ID, error)
+
+	// IssueAddPermissionlessDelegatorTx creates, signs, and issues a new
+	// delegator of the specified subnet on the specified nodeID.
+	//
+	// - [vdr] specifies all the details of the delegation period such as the
+	//   subnetID, startTime, endTime, stake weight, and nodeID.
+	// - [assetID] specifies the asset to stake.
+	// - [rewardsOwner] specifies the owner of all the rewards this delegator
+	//   earns during its delegation period.
+	IssueAddPermissionlessDelegatorTx(
+		vdr *txs.SubnetValidator,
+		assetID ids.ID,
+		rewardsOwner *secp256k1fx.OutputOwners,
+		options ...common.Option,
+	) (ids.ID, error)
+
 	// IssueUnsignedTx signs and issues the unsigned tx.
 	IssueUnsignedTx(
-		utx platformvm.UnsignedTx,
+		utx txs.UnsignedTx,
 		options ...common.Option,
 	) (ids.ID, error)
 
 	// IssueTx issues the signed tx.
 	IssueTx(
-		tx *platformvm.Tx,
+		tx *txs.Tx,
 		options ...common.Option,
 	) (ids.ID, error)
 }
@@ -164,9 +265,13 @@ type wallet struct {
 	client  platformvm.Client
 }
 
-func (w *wallet) Builder() Builder { return w.builder }
+func (w *wallet) Builder() Builder {
+	return w.builder
+}
 
-func (w *wallet) Signer() Signer { return w.signer }
+func (w *wallet) Signer() Signer {
+	return w.signer
+}
 
 func (w *wallet) IssueBaseTx(
 	outputs []*avax.TransferableOutput,
@@ -180,12 +285,12 @@ func (w *wallet) IssueBaseTx(
 }
 
 func (w *wallet) IssueAddValidatorTx(
-	validator *platformvm.Validator,
+	vdr *txs.Validator,
 	rewardsOwner *secp256k1fx.OutputOwners,
 	shares uint32,
 	options ...common.Option,
 ) (ids.ID, error) {
-	utx, err := w.builder.NewAddValidatorTx(validator, rewardsOwner, shares, options...)
+	utx, err := w.builder.NewAddValidatorTx(vdr, rewardsOwner, shares, options...)
 	if err != nil {
 		return ids.Empty, err
 	}
@@ -193,10 +298,22 @@ func (w *wallet) IssueAddValidatorTx(
 }
 
 func (w *wallet) IssueAddSubnetValidatorTx(
-	validator *platformvm.SubnetValidator,
+	vdr *txs.SubnetValidator,
 	options ...common.Option,
 ) (ids.ID, error) {
-	utx, err := w.builder.NewAddSubnetValidatorTx(validator, options...)
+	utx, err := w.builder.NewAddSubnetValidatorTx(vdr, options...)
+	if err != nil {
+		return ids.Empty, err
+	}
+	return w.IssueUnsignedTx(utx, options...)
+}
+
+func (w *wallet) IssueRemoveSubnetValidatorTx(
+	nodeID ids.NodeID,
+	subnetID ids.ID,
+	options ...common.Option,
+) (ids.ID, error) {
+	utx, err := w.builder.NewRemoveSubnetValidatorTx(nodeID, subnetID, options...)
 	if err != nil {
 		return ids.Empty, err
 	}
@@ -204,11 +321,11 @@ func (w *wallet) IssueAddSubnetValidatorTx(
 }
 
 func (w *wallet) IssueAddDelegatorTx(
-	validator *platformvm.Validator,
+	vdr *txs.Validator,
 	rewardsOwner *secp256k1fx.OutputOwners,
 	options ...common.Option,
 ) (ids.ID, error) {
-	utx, err := w.builder.NewAddDelegatorTx(validator, rewardsOwner, options...)
+	utx, err := w.builder.NewAddDelegatorTx(vdr, rewardsOwner, options...)
 	if err != nil {
 		return ids.Empty, err
 	}
@@ -265,8 +382,90 @@ func (w *wallet) IssueExportTx(
 	return w.IssueUnsignedTx(utx, options...)
 }
 
+func (w *wallet) IssueTransformSubnetTx(
+	subnetID ids.ID,
+	assetID ids.ID,
+	initialSupply uint64,
+	maxSupply uint64,
+	minConsumptionRate uint64,
+	maxConsumptionRate uint64,
+	minValidatorStake uint64,
+	maxValidatorStake uint64,
+	minStakeDuration time.Duration,
+	maxStakeDuration time.Duration,
+	minDelegationFee uint32,
+	minDelegatorStake uint64,
+	maxValidatorWeightFactor byte,
+	uptimeRequirement uint32,
+	options ...common.Option,
+) (ids.ID, error) {
+	utx, err := w.builder.NewTransformSubnetTx(
+		subnetID,
+		assetID,
+		initialSupply,
+		maxSupply,
+		minConsumptionRate,
+		maxConsumptionRate,
+		minValidatorStake,
+		maxValidatorStake,
+		minStakeDuration,
+		maxStakeDuration,
+		minDelegationFee,
+		minDelegatorStake,
+		maxValidatorWeightFactor,
+		uptimeRequirement,
+		options...,
+	)
+	if err != nil {
+		return ids.Empty, err
+	}
+	return w.IssueUnsignedTx(utx, options...)
+}
+
+func (w *wallet) IssueAddPermissionlessValidatorTx(
+	vdr *txs.SubnetValidator,
+	signer signer.Signer,
+	assetID ids.ID,
+	validationRewardsOwner *secp256k1fx.OutputOwners,
+	delegationRewardsOwner *secp256k1fx.OutputOwners,
+	shares uint32,
+	options ...common.Option,
+) (ids.ID, error) {
+	utx, err := w.builder.NewAddPermissionlessValidatorTx(
+		vdr,
+		signer,
+		assetID,
+		validationRewardsOwner,
+		delegationRewardsOwner,
+		shares,
+		options...,
+	)
+	if err != nil {
+		return ids.Empty, err
+	}
+	return w.IssueUnsignedTx(utx, options...)
+}
+
+func (w *wallet) IssueAddPermissionlessDelegatorTx(
+	vdr *txs.SubnetValidator,
+	assetID ids.ID,
+	rewardsOwner *secp256k1fx.OutputOwners,
+	options ...common.Option,
+) (ids.ID, error) {
+	utx, err := w.builder.NewAddPermissionlessDelegatorTx(
+		vdr,
+		assetID,
+		rewardsOwner,
+		options...,
+	)
+	if err != nil {
+		return ids.Empty, err
+	}
+	return w.IssueUnsignedTx(utx, options...)
+}
+
 func (w *wallet) IssueUnsignedTx(
-	utx platformvm.UnsignedTx,
+	utx txs.UnsignedTx,
 	options ...common.Option,
 ) (ids.ID, error) {
 	ops := common.NewOptions(options)
@@ -280,7 +479,7 @@ func (w *wallet) IssueUnsignedTx(
 }
 
 func (w *wallet) IssueTx(
-	tx *platformvm.Tx,
+	tx *txs.Tx,
 	options ...common.Option,
 ) (ids.ID, error) {
 	ops := common.NewOptions(options)
@@ -294,7 +493,7 @@ func (w *wallet) IssueTx(
 		return txID, w.Backend.AcceptTx(ctx, tx)
 	}
 
-	txStatus, err := w.client.AwaitTxDecided(ctx, txID, false, ops.PollFrequency())
+	txStatus, err := w.client.AwaitTxDecided(ctx, txID, ops.PollFrequency())
 	if err != nil {
 		return txID, err
 	}

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package peer
@@ -10,19 +10,18 @@ import (
 	"net"
 
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/avalanchego/utils/hashing"
 )
 
 var (
 	errNoCert = errors.New("tls handshake finished with no peer certificate")
 
-	_ Upgrader = &tlsServerUpgrader{}
-	_ Upgrader = &tlsClientUpgrader{}
+	_ Upgrader = (*tlsServerUpgrader)(nil)
+	_ Upgrader = (*tlsClientUpgrader)(nil)
 )
 
 type Upgrader interface {
 	// Must be thread safe
-	Upgrade(net.Conn) (ids.ShortID, net.Conn, *x509.Certificate, error)
+	Upgrade(net.Conn) (ids.NodeID, net.Conn, *x509.Certificate, error)
 }
 
 type tlsServerUpgrader struct {
@@ -35,7 +34,7 @@ func NewTLSServerUpgrader(config *tls.Config) Upgrader {
 	}
 }
 
-func (t tlsServerUpgrader) Upgrade(conn net.Conn) (ids.ShortID, net.Conn, *x509.Certificate, error) {
+func (t tlsServerUpgrader) Upgrade(conn net.Conn) (ids.NodeID, net.Conn, *x509.Certificate, error) {
 	return connToIDAndCert(tls.Server(conn, t.config))
 }
 
@@ -49,25 +48,19 @@ func NewTLSClientUpgrader(config *tls.Config) Upgrader {
 	}
 }
 
-func (t tlsClientUpgrader) Upgrade(conn net.Conn) (ids.ShortID, net.Conn, *x509.Certificate, error) {
+func (t tlsClientUpgrader) Upgrade(conn net.Conn) (ids.NodeID, net.Conn, *x509.Certificate, error) {
 	return connToIDAndCert(tls.Client(conn, t.config))
 }
 
-func connToIDAndCert(conn *tls.Conn) (ids.ShortID, net.Conn, *x509.Certificate, error) {
+func connToIDAndCert(conn *tls.Conn) (ids.NodeID, net.Conn, *x509.Certificate, error) {
 	if err := conn.Handshake(); err != nil {
-		return ids.ShortID{}, nil, nil, err
+		return ids.NodeID{}, nil, nil, err
 	}
 
 	state := conn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
-		return ids.ShortID{}, nil, nil, errNoCert
+		return ids.NodeID{}, nil, nil, errNoCert
 	}
 	peerCert := state.PeerCertificates[0]
-	return CertToID(peerCert), conn, peerCert, nil
-}
-
-func CertToID(cert *x509.Certificate) ids.ShortID {
-	return hashing.ComputeHash160Array(
-		hashing.ComputeHash256(cert.Raw),
-	)
+	return ids.NodeIDFromCert(peerCert), conn, peerCert, nil
 }

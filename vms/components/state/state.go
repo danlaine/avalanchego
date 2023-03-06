@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package state
@@ -20,7 +20,7 @@ const cacheSize = 1000
 var (
 	errWrongType = errors.New("value in the database was the wrong type")
 
-	_ State = &state{}
+	_ State = (*state)(nil)
 )
 
 // State is a key-value store where every value is associated with a "type ID".
@@ -90,7 +90,7 @@ type state struct {
 	// Keys:   Type ID
 	// Values: Cache that stores uniqueIDs for values that were put with that type ID
 	//         (Saves us from having to re-compute uniqueIDs)
-	uniqueIDCaches map[uint64]*cache.LRU
+	uniqueIDCaches map[uint64]*cache.LRU[ids.ID, ids.ID]
 }
 
 func (s *state) RegisterType(
@@ -176,13 +176,13 @@ func (s *state) PutID(db database.Database, key ids.ID, id ids.ID) error {
 
 // GetID gets the ID associated with [key] in [db]
 func (s *state) GetID(db database.Database, key ids.ID) (ids.ID, error) {
-	IDInterface, err := s.Get(db, IDTypeID, key)
+	idIntf, err := s.Get(db, IDTypeID, key)
 	if err != nil {
 		return ids.ID{}, err
 	}
 
-	if ID, ok := IDInterface.(ids.ID); ok {
-		return ID, nil
+	if id, ok := idIntf.(ids.ID); ok {
+		return id, nil
 	}
 
 	return ids.ID{}, errWrongType
@@ -211,11 +211,11 @@ func (s *state) GetTime(db database.Database, key ids.ID) (time.Time, error) {
 func (s *state) uniqueID(id ids.ID, typeID uint64) ids.ID {
 	uIDCache, cacheExists := s.uniqueIDCaches[typeID]
 	if cacheExists {
-		if uID, uIDExists := uIDCache.Get(id); uIDExists { // Get the uniqueID associated with [typeID] and [ID]
-			return uID.(ids.ID)
+		if uID, exists := uIDCache.Get(id); exists { // Get the uniqueID associated with [typeID] and [ID]
+			return uID
 		}
 	} else {
-		s.uniqueIDCaches[typeID] = &cache.LRU{Size: cacheSize}
+		s.uniqueIDCaches[typeID] = &cache.LRU[ids.ID, ids.ID]{Size: cacheSize}
 	}
 	uID := id.Prefix(typeID)
 	s.uniqueIDCaches[typeID].Put(id, uID)
@@ -227,7 +227,7 @@ func NewState() (State, error) {
 	state := &state{
 		marshallers:    make(map[uint64]func(interface{}) ([]byte, error)),
 		unmarshallers:  make(map[uint64]func([]byte) (interface{}, error)),
-		uniqueIDCaches: make(map[uint64]*cache.LRU),
+		uniqueIDCaches: make(map[uint64]*cache.LRU[ids.ID, ids.ID]),
 	}
 
 	// Register ID, Status and time.Time so they can be put/get without client code

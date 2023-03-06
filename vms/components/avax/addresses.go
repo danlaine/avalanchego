@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package avax
@@ -9,10 +9,11 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/utils/constants"
-	"github.com/ava-labs/avalanchego/utils/formatting"
+	"github.com/ava-labs/avalanchego/utils/formatting/address"
+	"github.com/ava-labs/avalanchego/utils/set"
 )
 
-var _ AddressManager = &addressManager{}
+var _ AddressManager = (*addressManager)(nil)
 
 type AddressManager interface {
 	// ParseLocalAddress takes in an address for this chain and produces the ID
@@ -57,7 +58,7 @@ func (a *addressManager) ParseLocalAddress(addrStr string) (ids.ShortID, error) 
 }
 
 func (a *addressManager) ParseAddress(addrStr string) (ids.ID, ids.ShortID, error) {
-	chainIDAlias, hrp, addrBytes, err := formatting.ParseAddress(addrStr)
+	chainIDAlias, hrp, addrBytes, err := address.Parse(addrStr)
 	if err != nil {
 		return ids.ID{}, ids.ShortID{}, err
 	}
@@ -93,15 +94,44 @@ func (a *addressManager) FormatAddress(chainID ids.ID, addr ids.ShortID) (string
 		return "", err
 	}
 	hrp := constants.GetHRP(a.ctx.NetworkID)
-	return formatting.FormatAddress(chainIDAlias, hrp, addr.Bytes())
+	return address.Format(chainIDAlias, hrp, addr.Bytes())
 }
 
-func ParseLocalAddresses(a AddressManager, addrStrs []string) (ids.ShortSet, error) {
-	addrs := make(ids.ShortSet, len(addrStrs))
+func ParseLocalAddresses(a AddressManager, addrStrs []string) (set.Set[ids.ShortID], error) {
+	addrs := make(set.Set[ids.ShortID], len(addrStrs))
 	for _, addrStr := range addrStrs {
 		addr, err := a.ParseLocalAddress(addrStr)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't parse address %q: %w", addrStr, err)
+		}
+		addrs.Add(addr)
+	}
+	return addrs, nil
+}
+
+// ParseServiceAddress get address ID from address string, being it either localized (using address manager,
+// doing also components validations), or not localized.
+// If both attempts fail, reports error from localized address parsing
+func ParseServiceAddress(a AddressManager, addrStr string) (ids.ShortID, error) {
+	addr, err := ids.ShortFromString(addrStr)
+	if err == nil {
+		return addr, nil
+	}
+
+	addr, err = a.ParseLocalAddress(addrStr)
+	if err != nil {
+		return addr, fmt.Errorf("couldn't parse address %q: %w", addrStr, err)
+	}
+	return addr, nil
+}
+
+// ParseServiceAddress get addresses IDs from addresses strings, being them either localized or not
+func ParseServiceAddresses(a AddressManager, addrStrs []string) (set.Set[ids.ShortID], error) {
+	addrs := set.NewSet[ids.ShortID](len(addrStrs))
+	for _, addrStr := range addrStrs {
+		addr, err := ParseServiceAddress(a, addrStr)
+		if err != nil {
+			return nil, err
 		}
 		addrs.Add(addr)
 	}

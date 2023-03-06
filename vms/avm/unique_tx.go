@@ -1,30 +1,34 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package avm
 
 import (
+	"context"
 	"errors"
 	"fmt"
+
+	"go.uber.org/zap"
 
 	"github.com/ava-labs/avalanchego/cache"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/choices"
 	"github.com/ava-labs/avalanchego/snow/consensus/snowstorm"
+	"github.com/ava-labs/avalanchego/utils/set"
+	"github.com/ava-labs/avalanchego/vms/avm/txs"
 	"github.com/ava-labs/avalanchego/vms/components/avax"
 )
 
 var (
 	errAssetIDMismatch = errors.New("asset IDs in the input don't match the utxo")
-	errWrongAssetID    = errors.New("asset ID must be AVAX in the atomic tx")
 	errMissingUTXO     = errors.New("missing utxo")
 	errUnknownTx       = errors.New("transaction is unknown")
 	errRejectedTx      = errors.New("transaction is rejected")
 )
 
 var (
-	_ snowstorm.Tx    = &UniqueTx{}
-	_ cache.Evictable = &UniqueTx{}
+	_ snowstorm.Tx            = (*UniqueTx)(nil)
+	_ cache.Evictable[ids.ID] = (*UniqueTx)(nil)
 )
 
 // UniqueTx provides a de-duplication service for txs. This only provides a
@@ -37,7 +41,7 @@ type UniqueTx struct {
 }
 
 type TxCachedState struct {
-	*Tx
+	*txs.Tx
 
 	unique, verifiedTx, verifiedState bool
 	validity                          error
@@ -59,7 +63,7 @@ func (tx *UniqueTx) refresh() {
 	if tx.unique {
 		return
 	}
-	unique := tx.vm.state.DeduplicateTx(tx)
+	unique := tx.vm.DeduplicateTx(tx)
 	prevTx := tx.Tx
 	if unique == tx {
 		tx.vm.numTxRefreshMisses.Inc()
@@ -100,27 +104,30 @@ func (tx *UniqueTx) Evict() {
 	tx.deps = nil
 }
 
-func (tx *UniqueTx) setStatus(status choices.Status) error {
+func (tx *UniqueTx) setStatus(status choices.Status) {
 	tx.refresh()
-	if tx.status == status {
-		return nil
+	if tx.status != status {
+		tx.status = status
+		tx.vm.state.AddStatus(tx.ID(), status)
 	}
-	tx.status = status
-	return tx.vm.state.PutStatus(tx.ID(), status)
 }
 
 // ID returns the wrapped txID
-func (tx *UniqueTx) ID() ids.ID       { return tx.txID }
-func (tx *UniqueTx) Key() interface{} { return tx.txID }
+func (tx *UniqueTx) ID() ids.ID {
+	return tx.txID
+}
+
+func (tx *UniqueTx) Key() ids.ID {
+	return tx.txID
+}
 
 // Accept is called when the transaction was finalized as accepted by consensus
-func (tx *UniqueTx) Accept() error {
+func (tx *UniqueTx) Accept(context.Context) error {
 	if s := tx.Status(); s != choices.Processing {
 		return fmt.Errorf("transaction has invalid status: %s", s)
 	}
 
 	txID := tx.ID()
-	defer tx.vm.db.Abort()
 
 	// Fetch the input UTXOs
 	inputUTXOIDs := tx.InputUTXOs()
@@ -153,60 +160,57 @@ func (tx *UniqueTx) Accept() error {
 			continue
 		}
 		utxoID := utxo.InputID()
-		if err := tx.vm.state.DeleteUTXO(utxoID); err != nil {
-			return fmt.Errorf("couldn't delete UTXO %s: %w", utxoID, err)
-		}
+		tx.vm.state.DeleteUTXO(utxoID)
 	}
 	// Add new utxos
 	for _, utxo := range outputUTXOs {
-		utxoID := utxo.InputID()
-		if err := tx.vm.state.PutUTXO(utxoID, utxo); err != nil {
-			return fmt.Errorf("couldn't put UTXO %s: %w", utxoID, err)
-		}
+		tx.vm.state.AddUTXO(utxo)
 	}
+	tx.setStatus(choices.Accepted)
 
-	if err := tx.setStatus(choices.Accepted); err != nil {
-		return fmt.Errorf("couldn't set status of tx %s: %w", txID, err)
-	}
-
-	commitBatch, err := tx.vm.db.CommitBatch()
+	commitBatch, err := tx.vm.state.CommitBatch()
 	if err != nil {
 		return fmt.Errorf("couldn't create commitBatch while processing tx %s: %w", txID, err)
 	}
 
-	if err := tx.ExecuteWithSideEffects(tx.vm, commitBatch); err != nil {
-		return fmt.Errorf("ExecuteWithSideEffects errored while processing tx %s: %w", txID, err)
+	defer tx.vm.state.Abort()
+	err = tx.Tx.Unsigned.Visit(&executeTx{
+		tx:           tx.Tx,
+		batch:        commitBatch,
+		sharedMemory: tx.vm.ctx.SharedMemory,
+		parser:       tx.vm.parser,
+	})
+	if err != nil {
+		return fmt.Errorf("ExecuteWithSideEffects erred while processing tx %s: %w", txID, err)
 	}
 
 	tx.vm.pubsub.Publish(NewPubSubFilterer(tx.Tx))
 	tx.vm.walletService.decided(txID)
 
 	tx.deps = nil // Needed to prevent a memory leak
-
 	return nil
 }
 
 // Reject is called when the transaction was finalized as rejected by consensus
-func (tx *UniqueTx) Reject() error {
-	defer tx.vm.db.Abort()
-
-	if err := tx.setStatus(choices.Rejected); err != nil {
-		tx.vm.ctx.Log.Error("Failed to reject tx %s due to %s", tx.txID, err)
-		return err
-	}
+func (tx *UniqueTx) Reject(context.Context) error {
+	tx.setStatus(choices.Rejected)
 
 	txID := tx.ID()
-	tx.vm.ctx.Log.Debug("Rejecting Tx: %s", txID)
+	tx.vm.ctx.Log.Debug("rejecting tx",
+		zap.Stringer("txID", txID),
+	)
 
-	if err := tx.vm.db.Commit(); err != nil {
-		tx.vm.ctx.Log.Error("Failed to commit reject %s due to %s", tx.txID, err)
+	if err := tx.vm.state.Commit(); err != nil {
+		tx.vm.ctx.Log.Error("failed to commit reject",
+			zap.Stringer("txID", tx.txID),
+			zap.Error(err),
+		)
 		return err
 	}
 
 	tx.vm.walletService.decided(txID)
 
 	tx.deps = nil // Needed to prevent a memory leak
-
 	return nil
 }
 
@@ -223,7 +227,7 @@ func (tx *UniqueTx) Dependencies() ([]snowstorm.Tx, error) {
 		return tx.deps, nil
 	}
 
-	txIDs := ids.Set{}
+	txIDs := set.Set[ids.ID]{}
 	for _, in := range tx.InputUTXOs() {
 		if in.Symbolic() {
 			continue
@@ -238,8 +242,8 @@ func (tx *UniqueTx) Dependencies() ([]snowstorm.Tx, error) {
 			txID: txID,
 		})
 	}
-	consumedIDs := tx.Tx.ConsumedAssetIDs()
-	for assetID := range tx.Tx.AssetIDs() {
+	consumedIDs := tx.Tx.Unsigned.ConsumedAssetIDs()
+	for assetID := range tx.Tx.Unsigned.AssetIDs() {
 		if consumedIDs.Contains(assetID) || txIDs.Contains(assetID) {
 			continue
 		}
@@ -268,12 +272,12 @@ func (tx *UniqueTx) InputIDs() []ids.ID {
 }
 
 // Whitelist is not supported by this transaction type, so [false] is returned.
-func (tx *UniqueTx) HasWhitelist() bool {
+func (*UniqueTx) HasWhitelist() bool {
 	return false
 }
 
 // Whitelist is not supported by this transaction type, so [false] is returned.
-func (tx *UniqueTx) Whitelist() (ids.Set, error) {
+func (*UniqueTx) Whitelist(context.Context) (set.Set[ids.ID], error) {
 	return nil, nil
 }
 
@@ -283,7 +287,7 @@ func (tx *UniqueTx) InputUTXOs() []*avax.UTXOID {
 	if tx.Tx == nil || len(tx.inputUTXOs) != 0 {
 		return tx.inputUTXOs
 	}
-	tx.inputUTXOs = tx.Tx.InputUTXOs()
+	tx.inputUTXOs = tx.Tx.Unsigned.InputUTXOs()
 	return tx.inputUTXOs
 }
 
@@ -317,7 +321,7 @@ func (tx *UniqueTx) verifyWithoutCacheWrites() error {
 }
 
 // Verify the validity of this transaction
-func (tx *UniqueTx) Verify() error {
+func (tx *UniqueTx) Verify(context.Context) error {
 	if err := tx.verifyWithoutCacheWrites(); err != nil {
 		return err
 	}
@@ -341,10 +345,9 @@ func (tx *UniqueTx) SyntacticVerify() error {
 	tx.verifiedTx = true
 	tx.validity = tx.Tx.SyntacticVerify(
 		tx.vm.ctx,
-		tx.vm.codec,
+		tx.vm.parser.Codec(),
 		tx.vm.feeAssetID,
-		tx.vm.TxFee,
-		tx.vm.CreateAssetTxFee,
+		&tx.vm.Config,
 		len(tx.vm.fxs),
 	)
 	return tx.validity
@@ -360,5 +363,8 @@ func (tx *UniqueTx) SemanticVerify() error {
 		return tx.validity
 	}
 
-	return tx.Tx.SemanticVerify(tx.vm, tx.UnsignedTx)
+	return tx.Unsigned.Visit(&txSemanticVerify{
+		tx: tx.Tx,
+		vm: tx.vm,
+	})
 }

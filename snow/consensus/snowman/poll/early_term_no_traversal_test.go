@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package poll
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils/bag"
 )
 
 func TestEarlyTermNoTraversalResults(t *testing.T) {
@@ -14,9 +15,9 @@ func TestEarlyTermNoTraversalResults(t *testing.T) {
 
 	vtxID := ids.ID{1}
 
-	vdr1 := ids.ShortID{1} // k = 1
+	vdr1 := ids.NodeID{1} // k = 1
 
-	vdrs := ids.ShortBag{}
+	vdrs := bag.Bag[ids.NodeID]{}
 	vdrs.Add(vdr1)
 
 	factory := NewEarlyTermNoTraversalFactory(alpha)
@@ -42,10 +43,10 @@ func TestEarlyTermNoTraversalString(t *testing.T) {
 
 	vtxID := ids.ID{1}
 
-	vdr1 := ids.ShortID{1}
-	vdr2 := ids.ShortID{2} // k = 2
+	vdr1 := ids.NodeID{1}
+	vdr2 := ids.NodeID{2} // k = 2
 
-	vdrs := ids.ShortBag{}
+	vdrs := bag.Bag[ids.NodeID]{}
 	vdrs.Add(
 		vdr1,
 		vdr2,
@@ -57,9 +58,9 @@ func TestEarlyTermNoTraversalString(t *testing.T) {
 	poll.Vote(vdr1, vtxID)
 
 	expected := `waiting on Bag: (Size = 1)
-    ID[BaMPFdqMUQ46BV8iRcwbVfsam55kMqcp]: Count = 1
+    NodeID-BaMPFdqMUQ46BV8iRcwbVfsam55kMqcp: 1
 received Bag: (Size = 1)
-    ID[SYXsAycDPUu4z2ZksJD5fh5nTDcH3vCFHnpcVye5XuJ2jArg]: Count = 1`
+    SYXsAycDPUu4z2ZksJD5fh5nTDcH3vCFHnpcVye5XuJ2jArg: 1`
 	if result := poll.String(); expected != result {
 		t.Fatalf("Poll should have returned %s but returned %s", expected, result)
 	}
@@ -70,10 +71,10 @@ func TestEarlyTermNoTraversalDropsDuplicatedVotes(t *testing.T) {
 
 	vtxID := ids.ID{1}
 
-	vdr1 := ids.ShortID{1}
-	vdr2 := ids.ShortID{2} // k = 2
+	vdr1 := ids.NodeID{1}
+	vdr2 := ids.NodeID{2} // k = 2
 
-	vdrs := ids.ShortBag{}
+	vdrs := bag.Bag[ids.NodeID]{}
 	vdrs.Add(
 		vdr1,
 		vdr2,
@@ -101,13 +102,13 @@ func TestEarlyTermNoTraversalTerminatesEarly(t *testing.T) {
 
 	vtxID := ids.ID{1}
 
-	vdr1 := ids.ShortID{1}
-	vdr2 := ids.ShortID{2}
-	vdr3 := ids.ShortID{3}
-	vdr4 := ids.ShortID{4}
-	vdr5 := ids.ShortID{5} // k = 5
+	vdr1 := ids.NodeID{1}
+	vdr2 := ids.NodeID{2}
+	vdr3 := ids.NodeID{3}
+	vdr4 := ids.NodeID{4}
+	vdr5 := ids.NodeID{5} // k = 5
 
-	vdrs := ids.ShortBag{}
+	vdrs := bag.Bag[ids.NodeID]{}
 	vdrs.Add(
 		vdr1,
 		vdr2,
@@ -146,12 +147,12 @@ func TestEarlyTermNoTraversalForSharedAncestor(t *testing.T) {
 	// A, then we cannot terminate early with alpha = k = 4
 	// If the final vote is cast for any of A, B, C, or D, then
 	// vertex A will have transitively received alpha = 4 votes
-	vdr1 := ids.ShortID{1}
-	vdr2 := ids.ShortID{2}
-	vdr3 := ids.ShortID{3}
-	vdr4 := ids.ShortID{4}
+	vdr1 := ids.NodeID{1}
+	vdr2 := ids.NodeID{2}
+	vdr3 := ids.NodeID{3}
+	vdr4 := ids.NodeID{4}
 
-	vdrs := ids.ShortBag{}
+	vdrs := bag.Bag[ids.NodeID]{}
 	vdrs.Add(
 		vdr1,
 		vdr2,
@@ -183,11 +184,11 @@ func TestEarlyTermNoTraversalForSharedAncestor(t *testing.T) {
 func TestEarlyTermNoTraversalWithFastDrops(t *testing.T) {
 	alpha := 2
 
-	vdr1 := ids.ShortID{1}
-	vdr2 := ids.ShortID{2}
-	vdr3 := ids.ShortID{3} // k = 3
+	vdr1 := ids.NodeID{1}
+	vdr2 := ids.NodeID{2}
+	vdr3 := ids.NodeID{3} // k = 3
 
-	vdrs := ids.ShortBag{}
+	vdrs := bag.Bag[ids.NodeID]{}
 	vdrs.Add(
 		vdr1,
 		vdr2,
@@ -212,10 +213,10 @@ func TestEarlyTermNoTraversalWithWeightedResponses(t *testing.T) {
 
 	vtxID := ids.ID{1}
 
-	vdr1 := ids.ShortID{2}
-	vdr2 := ids.ShortID{3}
+	vdr1 := ids.NodeID{2}
+	vdr2 := ids.NodeID{3}
 
-	vdrs := ids.ShortBag{}
+	vdrs := bag.Bag[ids.NodeID]{}
 	vdrs.Add(
 		vdr1,
 		vdr2,
@@ -243,10 +244,10 @@ func TestEarlyTermNoTraversalWithWeightedResponses(t *testing.T) {
 func TestEarlyTermNoTraversalDropWithWeightedResponses(t *testing.T) {
 	alpha := 2
 
-	vdr1 := ids.ShortID{1}
-	vdr2 := ids.ShortID{2}
+	vdr1 := ids.NodeID{1}
+	vdr2 := ids.NodeID{2}
 
-	vdrs := ids.ShortBag{}
+	vdrs := bag.Bag[ids.NodeID]{}
 	vdrs.Add(
 		vdr1,
 		vdr2,

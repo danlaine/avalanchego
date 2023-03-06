@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package peer
@@ -15,13 +15,19 @@ import (
 	"github.com/ava-labs/avalanchego/message"
 	"github.com/ava-labs/avalanchego/network/throttling"
 	"github.com/ava-labs/avalanchego/snow/networking/router"
+	"github.com/ava-labs/avalanchego/snow/networking/tracker"
 	"github.com/ava-labs/avalanchego/snow/validators"
 	"github.com/ava-labs/avalanchego/staking"
-	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/constants"
+	"github.com/ava-labs/avalanchego/utils/ips"
 	"github.com/ava-labs/avalanchego/utils/logging"
+	"github.com/ava-labs/avalanchego/utils/math/meter"
+	"github.com/ava-labs/avalanchego/utils/resource"
+	"github.com/ava-labs/avalanchego/utils/set"
 	"github.com/ava-labs/avalanchego/version"
 )
+
+const maxMessageToSend = 1024
 
 // StartTestPeer provides a simple interface to create a peer that has finished
 // the p2p handshake.
@@ -30,16 +36,16 @@ import (
 //
 // The returned peer will not throttle inbound or outbound messages.
 //
-// - [ctx] provides a way of canceling the connection request.
-// - [ip] is the remote that will be dialed to create the connection.
-// - [networkID] will be sent to the peer during the handshake. If the peer is
-//   expecting a different [networkID], the handshake will fail and an error
-//   will be returned.
-// - [router] will be called with all non-handshake messages received by the
-//   peer.
+//   - [ctx] provides a way of canceling the connection request.
+//   - [ip] is the remote that will be dialed to create the connection.
+//   - [networkID] will be sent to the peer during the handshake. If the peer is
+//     expecting a different [networkID], the handshake will fail and an error
+//     will be returned.
+//   - [router] will be called with all non-handshake messages received by the
+//     peer.
 func StartTestPeer(
 	ctx context.Context,
-	ip utils.IPDesc,
+	ip ips.IPPort,
 	networkID uint32,
 	router router.InboundHandler,
 ) (Peer, error) {
@@ -54,7 +60,7 @@ func StartTestPeer(
 		return nil, err
 	}
 
-	tlsConfg := TLSConfig(*tlsCert)
+	tlsConfg := TLSConfig(*tlsCert, nil)
 	clientUpgrader := NewTLSClientUpgrader(tlsConfg)
 
 	peerID, conn, cert, err := clientUpgrader.Upgrade(conn)
@@ -64,8 +70,8 @@ func StartTestPeer(
 
 	mc, err := message.NewCreator(
 		prometheus.NewRegistry(),
-		true,
 		"",
+		true,
 		10*time.Second,
 	)
 	if err != nil {
@@ -81,39 +87,45 @@ func StartTestPeer(
 		return nil, err
 	}
 
-	ipDesc := utils.IPDesc{
-		IP:   net.IPv6zero,
-		Port: 0,
+	resourceTracker, err := tracker.NewResourceTracker(
+		prometheus.NewRegistry(),
+		resource.NoUsage,
+		meter.ContinuousFactory{},
+		10*time.Second,
+	)
+	if err != nil {
+		return nil, err
 	}
+
+	signerIP := ips.NewDynamicIPPort(net.IPv6zero, 0)
+	tls := tlsCert.PrivateKey.(crypto.Signer)
+
 	peer := Start(
 		&Config{
 			Metrics:              metrics,
 			MessageCreator:       mc,
 			Log:                  logging.NoLog{},
 			InboundMsgThrottler:  throttling.NewNoInboundThrottler(),
-			OutboundMsgThrottler: throttling.NewNoOutboundThrottler(),
-			Network: NewTestNetwork(
-				mc,
-				networkID,
-				ipDesc,
-				version.CurrentApp,
-				tlsCert.PrivateKey.(crypto.Signer),
-				ids.Set{},
-				100,
-			),
+			Network:              TestNetwork,
 			Router:               router,
 			VersionCompatibility: version.GetCompatibility(networkID),
-			VersionParser:        version.NewDefaultApplicationParser(),
-			MySubnets:            ids.Set{},
+			MySubnets:            set.Set[ids.ID]{},
 			Beacons:              validators.NewSet(),
 			NetworkID:            networkID,
 			PingFrequency:        constants.DefaultPingFrequency,
 			PongTimeout:          constants.DefaultPingPongTimeout,
 			MaxClockDifference:   time.Minute,
+			ResourceTracker:      resourceTracker,
+			IPSigner:             NewIPSigner(signerIP, tls),
 		},
 		conn,
 		cert,
 		peerID,
+		NewBlockingMessageQueue(
+			metrics,
+			logging.NoLog{},
+			maxMessageToSend,
+		),
 	)
 	return peer, peer.AwaitReady(ctx)
 }

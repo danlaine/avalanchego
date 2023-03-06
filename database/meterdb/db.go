@@ -1,9 +1,11 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package meterdb
 
 import (
+	"context"
+
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ava-labs/avalanchego/database"
@@ -11,9 +13,9 @@ import (
 )
 
 var (
-	_ database.Database = &Database{}
-	_ database.Batch    = &batch{}
-	_ database.Iterator = &iterator{}
+	_ database.Database = (*Database)(nil)
+	_ database.Batch    = (*batch)(nil)
+	_ database.Iterator = (*iterator)(nil)
 )
 
 // Database tracks the amount of time each operation takes and how many bytes
@@ -30,8 +32,11 @@ func New(
 	registerer prometheus.Registerer,
 	db database.Database,
 ) (*Database, error) {
-	meterDB := &Database{db: db}
-	return meterDB, meterDB.metrics.Initialize(namespace, registerer)
+	metrics, err := newMetrics(namespace, registerer)
+	return &Database{
+		metrics: metrics,
+		db:      db,
+	}, err
 }
 
 func (db *Database) Has(key []byte) (bool, error) {
@@ -111,14 +116,6 @@ func (db *Database) NewIteratorWithStartAndPrefix(
 	return it
 }
 
-func (db *Database) Stat(stat string) (string, error) {
-	start := db.clock.Time()
-	result, err := db.db.Stat(stat)
-	end := db.clock.Time()
-	db.stat.Observe(float64(end.Sub(start)))
-	return result, err
-}
-
 func (db *Database) Compact(start, limit []byte) error {
 	startTime := db.clock.Time()
 	err := db.db.Compact(start, limit)
@@ -133,6 +130,14 @@ func (db *Database) Close() error {
 	end := db.clock.Time()
 	db.close.Observe(float64(end.Sub(start)))
 	return err
+}
+
+func (db *Database) HealthCheck(ctx context.Context) (interface{}, error) {
+	start := db.clock.Time()
+	result, err := db.db.HealthCheck(ctx)
+	end := db.clock.Time()
+	db.healthCheck.Observe(float64(end.Sub(start)))
+	return result, err
 }
 
 type batch struct {

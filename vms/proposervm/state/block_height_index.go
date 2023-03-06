@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package state
@@ -9,15 +9,12 @@ import (
 	"github.com/ava-labs/avalanchego/database/prefixdb"
 	"github.com/ava-labs/avalanchego/database/versiondb"
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/avalanchego/utils/wrappers"
 )
 
-const (
-	cacheSize = 8192 // max cache entries
-)
+const cacheSize = 8192 // max cache entries
 
 var (
-	_ HeightIndex = &heightIndex{}
+	_ HeightIndex = (*heightIndex)(nil)
 
 	heightPrefix   = []byte("height")
 	metadataPrefix = []byte("metadata")
@@ -56,16 +53,13 @@ type HeightIndex interface {
 	HeightIndexWriter
 	HeightIndexGetter
 	HeightIndexBatchSupport
-
-	// ResetHeightIndex deletes all index DB entries
-	ResetHeightIndex() error
 }
 
 type heightIndex struct {
 	versiondb.Commitable
 
 	// Caches block height -> proposerVMBlockID.
-	heightsCache cache.Cacher
+	heightsCache cache.Cacher[uint64, ids.ID]
 
 	heightDB   database.Database
 	metadataDB database.Database
@@ -75,51 +69,15 @@ func NewHeightIndex(db database.Database, commitable versiondb.Commitable) Heigh
 	return &heightIndex{
 		Commitable: commitable,
 
-		heightsCache: &cache.LRU{Size: cacheSize},
+		heightsCache: &cache.LRU[uint64, ids.ID]{Size: cacheSize},
 		heightDB:     prefixdb.New(heightPrefix, db),
 		metadataDB:   prefixdb.New(metadataPrefix, db),
 	}
 }
 
-func (hi *heightIndex) ResetHeightIndex() error {
-	var (
-		itHeight   = hi.heightDB.NewIterator()
-		itMetadata = hi.metadataDB.NewIterator()
-	)
-	defer func() {
-		itHeight.Release()
-		itMetadata.Release()
-	}()
-
-	// clear height cache
-	hi.heightsCache.Flush()
-
-	// clear heightDB
-	for itHeight.Next() {
-		if err := hi.heightDB.Delete(itHeight.Key()); err != nil {
-			return err
-		}
-	}
-
-	// clear metadataDB
-	for itMetadata.Next() {
-		if err := hi.metadataDB.Delete(itMetadata.Key()); err != nil {
-			return err
-		}
-	}
-
-	errs := wrappers.Errs{}
-	errs.Add(
-		itHeight.Error(),
-		itMetadata.Error(),
-	)
-	return errs.Err
-}
-
 func (hi *heightIndex) GetBlockIDAtHeight(height uint64) (ids.ID, error) {
-	if blkIDIntf, found := hi.heightsCache.Get(height); found {
-		res, _ := blkIDIntf.(ids.ID)
-		return res, nil
+	if blkID, found := hi.heightsCache.Get(height); found {
+		return blkID, nil
 	}
 
 	key := database.PackUInt64(height)

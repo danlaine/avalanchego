@@ -1,10 +1,13 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package proposervm
 
 import (
+	"context"
 	"fmt"
+
+	"go.uber.org/zap"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/ids"
@@ -14,11 +17,8 @@ import (
 // shouldHeightIndexBeRepaired checks if index needs repairing and stores a
 // checkpoint if repairing is needed.
 //
-// vm.ctx.Lock is acquired to avoid interleaving with block acceptance.
-func (vm *VM) shouldHeightIndexBeRepaired() (bool, error) {
-	vm.ctx.Lock.Lock()
-	defer vm.ctx.Lock.Unlock()
-
+// vm.ctx.Lock should be held
+func (vm *VM) shouldHeightIndexBeRepaired(ctx context.Context) (bool, error) {
 	_, err := vm.State.GetCheckpoint()
 	if err != database.ErrNotFound {
 		return true, err
@@ -34,7 +34,7 @@ func (vm *VM) shouldHeightIndexBeRepaired() (bool, error) {
 		return false, err
 	}
 
-	lastAcceptedBlk, err := vm.getPostForkBlock(latestProBlkID)
+	lastAcceptedBlk, err := vm.getPostForkBlock(ctx, latestProBlkID)
 	if err != nil {
 		// Could not retrieve last accepted block.
 		return false, err
@@ -52,8 +52,8 @@ func (vm *VM) shouldHeightIndexBeRepaired() (bool, error) {
 }
 
 // vm.ctx.Lock should be held
-func (vm *VM) VerifyHeightIndex() error {
-	if _, ok := vm.ChainVM.(block.HeightIndexedChainVM); !ok {
+func (vm *VM) VerifyHeightIndex(context.Context) error {
+	if vm.hVM == nil {
 		return block.ErrHeightIndexedVMNotImplemented
 	}
 
@@ -64,24 +64,23 @@ func (vm *VM) VerifyHeightIndex() error {
 }
 
 // vm.ctx.Lock should be held
-func (vm *VM) GetBlockIDAtHeight(height uint64) (ids.ID, error) {
+func (vm *VM) GetBlockIDAtHeight(ctx context.Context, height uint64) (ids.ID, error) {
 	if !vm.hIndexer.IsRepaired() {
 		return ids.Empty, block.ErrIndexIncomplete
 	}
 
 	// The indexer will only report that the index has been repaired if the
 	// underlying VM supports indexing.
-	innerHVM := vm.ChainVM.(block.HeightIndexedChainVM)
 	switch forkHeight, err := vm.State.GetForkHeight(); err {
 	case nil:
 		if height < forkHeight {
-			return innerHVM.GetBlockIDAtHeight(height)
+			return vm.hVM.GetBlockIDAtHeight(ctx, height)
 		}
 		return vm.State.GetBlockIDAtHeight(height)
 
 	case database.ErrNotFound:
 		// fork not reached yet. Block must be pre-fork
-		return innerHVM.GetBlockIDAtHeight(height)
+		return vm.hVM.GetBlockIDAtHeight(ctx, height)
 
 	default:
 		return ids.Empty, err
@@ -91,10 +90,6 @@ func (vm *VM) GetBlockIDAtHeight(height uint64) (ids.ID, error) {
 // As postFork blocks/options are accepted, height index is updated even if its
 // repairing is ongoing. vm.ctx.Lock should be held
 func (vm *VM) updateHeightIndex(height uint64, blkID ids.ID) error {
-	if vm.resetHeightIndexOngoing.GetValue() {
-		return nil
-	}
-
 	_, err := vm.State.GetCheckpoint()
 	switch err {
 	case nil:
@@ -132,6 +127,9 @@ func (vm *VM) storeHeightEntry(height uint64, blkID ids.ID) error {
 		return fmt.Errorf("failed to load fork height: %w", err)
 	}
 
-	vm.ctx.Log.Debug("indexed block %s at height %d", blkID, height)
+	vm.ctx.Log.Debug("indexed block",
+		zap.Stringer("blkID", blkID),
+		zap.Uint64("height", height),
+	)
 	return vm.State.SetBlockIDAtHeight(height, blkID)
 }

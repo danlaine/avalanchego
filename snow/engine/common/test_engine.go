@@ -1,9 +1,10 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package common
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -14,28 +15,34 @@ import (
 )
 
 var (
-	errTimeout                   = errors.New("unexpectedly called Timeout")
-	errGossip                    = errors.New("unexpectedly called Gossip")
-	errNotify                    = errors.New("unexpectedly called Notify")
-	errGetAcceptedFrontier       = errors.New("unexpectedly called GetAcceptedFrontier")
-	errGetAcceptedFrontierFailed = errors.New("unexpectedly called GetAcceptedFrontierFailed")
-	errAcceptedFrontier          = errors.New("unexpectedly called AcceptedFrontier")
-	errGetAccepted               = errors.New("unexpectedly called GetAccepted")
-	errGetAcceptedFailed         = errors.New("unexpectedly called GetAcceptedFailed")
-	errAccepted                  = errors.New("unexpectedly called Accepted")
-	errGet                       = errors.New("unexpectedly called Get")
-	errGetAncestors              = errors.New("unexpectedly called GetAncestors")
-	errGetFailed                 = errors.New("unexpectedly called GetFailed")
-	errGetAncestorsFailed        = errors.New("unexpectedly called GetAncestorsFailed")
-	errPut                       = errors.New("unexpectedly called Put")
-	errAncestors                 = errors.New("unexpectedly called Ancestors")
-	errPushQuery                 = errors.New("unexpectedly called PushQuery")
-	errPullQuery                 = errors.New("unexpectedly called PullQuery")
-	errQueryFailed               = errors.New("unexpectedly called QueryFailed")
-	errChits                     = errors.New("unexpectedly called Chits")
-	errStart                     = errors.New("unexpectedly called Start")
+	errTimeout                       = errors.New("unexpectedly called Timeout")
+	errGossip                        = errors.New("unexpectedly called Gossip")
+	errNotify                        = errors.New("unexpectedly called Notify")
+	errGetStateSummaryFrontier       = errors.New("unexpectedly called GetStateSummaryFrontier")
+	errGetStateSummaryFrontierFailed = errors.New("unexpectedly called GetStateSummaryFrontierFailed")
+	errStateSummaryFrontier          = errors.New("unexpectedly called StateSummaryFrontier")
+	errGetAcceptedStateSummary       = errors.New("unexpectedly called GetAcceptedStateSummary")
+	errGetAcceptedStateSummaryFailed = errors.New("unexpectedly called GetAcceptedStateSummaryFailed")
+	errAcceptedStateSummary          = errors.New("unexpectedly called AcceptedStateSummary")
+	errGetAcceptedFrontier           = errors.New("unexpectedly called GetAcceptedFrontier")
+	errGetAcceptedFrontierFailed     = errors.New("unexpectedly called GetAcceptedFrontierFailed")
+	errAcceptedFrontier              = errors.New("unexpectedly called AcceptedFrontier")
+	errGetAccepted                   = errors.New("unexpectedly called GetAccepted")
+	errGetAcceptedFailed             = errors.New("unexpectedly called GetAcceptedFailed")
+	errAccepted                      = errors.New("unexpectedly called Accepted")
+	errGet                           = errors.New("unexpectedly called Get")
+	errGetAncestors                  = errors.New("unexpectedly called GetAncestors")
+	errGetFailed                     = errors.New("unexpectedly called GetFailed")
+	errGetAncestorsFailed            = errors.New("unexpectedly called GetAncestorsFailed")
+	errPut                           = errors.New("unexpectedly called Put")
+	errAncestors                     = errors.New("unexpectedly called Ancestors")
+	errPushQuery                     = errors.New("unexpectedly called PushQuery")
+	errPullQuery                     = errors.New("unexpectedly called PullQuery")
+	errQueryFailed                   = errors.New("unexpectedly called QueryFailed")
+	errChits                         = errors.New("unexpectedly called Chits")
+	errStart                         = errors.New("unexpectedly called Start")
 
-	_ Engine = &EngineTest{}
+	_ Engine = (*EngineTest)(nil)
 )
 
 // EngineTest is a test engine
@@ -53,6 +60,14 @@ type EngineTest struct {
 	CantContext,
 
 	CantNotify,
+
+	CantGetStateSummaryFrontier,
+	CantGetStateSummaryFrontierFailed,
+	CantStateSummaryFrontier,
+
+	CantGetAcceptedStateSummary,
+	CantGetAcceptedStateSummaryFailed,
+	CantAcceptedStateSummary,
 
 	CantGetAcceptedFrontier,
 	CantGetAcceptedFrontierFailed,
@@ -79,6 +94,10 @@ type EngineTest struct {
 
 	CantHealth,
 
+	CantCrossChainAppRequest,
+	CantCrossChainAppRequestFailed,
+	CantCrossChainAppResponse,
+
 	CantAppRequest,
 	CantAppResponse,
 	CantAppGossip,
@@ -86,24 +105,34 @@ type EngineTest struct {
 
 	CantGetVM bool
 
-	StartF                                             func(startReqID uint32) error
-	IsBootstrappedF                                    func() bool
-	ContextF                                           func() *snow.ConsensusContext
-	HaltF                                              func()
-	TimeoutF, GossipF, ShutdownF                       func() error
-	NotifyF                                            func(Message) error
-	GetF, GetAncestorsF, PullQueryF                    func(nodeID ids.ShortID, requestID uint32, containerID ids.ID) error
-	PutF, PushQueryF                                   func(nodeID ids.ShortID, requestID uint32, container []byte) error
-	AncestorsF                                         func(nodeID ids.ShortID, requestID uint32, containers [][]byte) error
-	AcceptedFrontierF, GetAcceptedF, AcceptedF, ChitsF func(nodeID ids.ShortID, requestID uint32, containerIDs []ids.ID) error
+	StartF                                     func(ctx context.Context, startReqID uint32) error
+	IsBootstrappedF                            func() bool
+	ContextF                                   func() *snow.ConsensusContext
+	HaltF                                      func(context.Context)
+	TimeoutF, GossipF, ShutdownF               func(context.Context) error
+	NotifyF                                    func(context.Context, Message) error
+	GetF, GetAncestorsF, PullQueryF            func(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) error
+	PutF, PushQueryF                           func(ctx context.Context, nodeID ids.NodeID, requestID uint32, container []byte) error
+	AncestorsF                                 func(ctx context.Context, nodeID ids.NodeID, requestID uint32, containers [][]byte) error
+	AcceptedFrontierF, GetAcceptedF, AcceptedF func(ctx context.Context, nodeID ids.NodeID, requestID uint32, preferredIDs []ids.ID) error
+	ChitsF                                     func(ctx context.Context, nodeID ids.NodeID, requestID uint32, preferredIDs []ids.ID, acceptedIDs []ids.ID) error
+	GetStateSummaryFrontierF, GetStateSummaryFrontierFailedF, GetAcceptedStateSummaryFailedF,
 	GetAcceptedFrontierF, GetFailedF, GetAncestorsFailedF,
-	QueryFailedF, GetAcceptedFrontierFailedF, GetAcceptedFailedF, AppRequestFailedF func(nodeID ids.ShortID, requestID uint32) error
-	ConnectedF                func(nodeID ids.ShortID, nodeVersion version.Application) error
-	DisconnectedF             func(nodeID ids.ShortID) error
-	HealthF                   func() (interface{}, error)
-	GetVMF                    func() VM
-	AppRequestF, AppResponseF func(nodeID ids.ShortID, requestID uint32, msg []byte) error
-	AppGossipF                func(nodeID ids.ShortID, msg []byte) error
+	QueryFailedF, GetAcceptedFrontierFailedF, GetAcceptedFailedF func(ctx context.Context, nodeID ids.NodeID, requestID uint32) error
+	AppRequestFailedF           func(ctx context.Context, nodeID ids.NodeID, requestID uint32) error
+	StateSummaryFrontierF       func(ctx context.Context, nodeID ids.NodeID, requestID uint32, summary []byte) error
+	GetAcceptedStateSummaryF    func(ctx context.Context, nodeID ids.NodeID, requestID uint32, keys []uint64) error
+	AcceptedStateSummaryF       func(ctx context.Context, nodeID ids.NodeID, requestID uint32, summaryIDs []ids.ID) error
+	ConnectedF                  func(ctx context.Context, nodeID ids.NodeID, nodeVersion *version.Application) error
+	DisconnectedF               func(ctx context.Context, nodeID ids.NodeID) error
+	HealthF                     func(context.Context) (interface{}, error)
+	GetVMF                      func() VM
+	AppRequestF                 func(ctx context.Context, nodeID ids.NodeID, requestID uint32, deadline time.Time, msg []byte) error
+	AppResponseF                func(ctx context.Context, nodeID ids.NodeID, requestID uint32, msg []byte) error
+	AppGossipF                  func(ctx context.Context, nodeID ids.NodeID, msg []byte) error
+	CrossChainAppRequestF       func(ctx context.Context, chainID ids.ID, requestID uint32, deadline time.Time, msg []byte) error
+	CrossChainAppResponseF      func(ctx context.Context, chainID ids.ID, requestID uint32, msg []byte) error
+	CrossChainAppRequestFailedF func(ctx context.Context, chainID ids.ID, requestID uint32) error
 }
 
 func (e *EngineTest) Default(cant bool) {
@@ -115,6 +144,12 @@ func (e *EngineTest) Default(cant bool) {
 	e.CantShutdown = cant
 	e.CantContext = cant
 	e.CantNotify = cant
+	e.CantGetStateSummaryFrontier = cant
+	e.CantGetStateSummaryFrontierFailed = cant
+	e.CantStateSummaryFrontier = cant
+	e.CantGetAcceptedStateSummary = cant
+	e.CantGetAcceptedStateSummaryFailed = cant
+	e.CantAcceptedStateSummary = cant
 	e.CantGetAcceptedFrontier = cant
 	e.CantGetAcceptedFrontierFailed = cant
 	e.CantAcceptedFrontier = cant
@@ -139,13 +174,19 @@ func (e *EngineTest) Default(cant bool) {
 	e.CantAppResponse = cant
 	e.CantAppGossip = cant
 	e.CantGetVM = cant
+	e.CantCrossChainAppRequest = cant
+	e.CantCrossChainAppRequestFailed = cant
+	e.CantCrossChainAppResponse = cant
 }
 
-func (e *EngineTest) Start(startReqID uint32) error {
+func (e *EngineTest) Start(ctx context.Context, startReqID uint32) error {
 	if e.StartF != nil {
-		return e.StartF(startReqID)
+		return e.StartF(ctx, startReqID)
 	}
-	if e.CantStart && e.T != nil {
+	if !e.CantStart {
+		return nil
+	}
+	if e.T != nil {
 		e.T.Fatalf("Unexpectedly called Start")
 	}
 	return errStart
@@ -155,15 +196,18 @@ func (e *EngineTest) Context() *snow.ConsensusContext {
 	if e.ContextF != nil {
 		return e.ContextF()
 	}
-	if e.CantContext && e.T != nil {
+	if !e.CantContext {
+		return nil
+	}
+	if e.T != nil {
 		e.T.Fatalf("Unexpectedly called Context")
 	}
 	return nil
 }
 
-func (e *EngineTest) Timeout() error {
+func (e *EngineTest) Timeout(ctx context.Context) error {
 	if e.TimeoutF != nil {
-		return e.TimeoutF()
+		return e.TimeoutF(ctx)
 	}
 	if !e.CantTimeout {
 		return nil
@@ -174,9 +218,9 @@ func (e *EngineTest) Timeout() error {
 	return errTimeout
 }
 
-func (e *EngineTest) Gossip() error {
+func (e *EngineTest) Gossip(ctx context.Context) error {
 	if e.GossipF != nil {
-		return e.GossipF()
+		return e.GossipF(ctx)
 	}
 	if !e.CantGossip {
 		return nil
@@ -187,17 +231,19 @@ func (e *EngineTest) Gossip() error {
 	return errGossip
 }
 
-func (e *EngineTest) Halt() {
+func (e *EngineTest) Halt(ctx context.Context) {
 	if e.HaltF != nil {
-		e.HaltF()
-	} else if e.CantHalt && e.T != nil {
+		e.HaltF(ctx)
+		return
+	}
+	if e.CantHalt && e.T != nil {
 		e.T.Fatalf("Unexpectedly called Halt")
 	}
 }
 
-func (e *EngineTest) Shutdown() error {
+func (e *EngineTest) Shutdown(ctx context.Context) error {
 	if e.ShutdownF != nil {
-		return e.ShutdownF()
+		return e.ShutdownF(ctx)
 	}
 	if !e.CantShutdown {
 		return nil
@@ -208,9 +254,9 @@ func (e *EngineTest) Shutdown() error {
 	return errShutdown
 }
 
-func (e *EngineTest) Notify(msg Message) error {
+func (e *EngineTest) Notify(ctx context.Context, msg Message) error {
 	if e.NotifyF != nil {
-		return e.NotifyF(msg)
+		return e.NotifyF(ctx, msg)
 	}
 	if !e.CantNotify {
 		return nil
@@ -221,9 +267,87 @@ func (e *EngineTest) Notify(msg Message) error {
 	return errNotify
 }
 
-func (e *EngineTest) GetAcceptedFrontier(nodeID ids.ShortID, requestID uint32) error {
+func (e *EngineTest) GetStateSummaryFrontier(ctx context.Context, validatorID ids.NodeID, requestID uint32) error {
+	if e.GetStateSummaryFrontierF != nil {
+		return e.GetStateSummaryFrontierF(ctx, validatorID, requestID)
+	}
+	if !e.CantGetStateSummaryFrontier {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatalf("Unexpectedly called GetStateSummaryFrontier")
+	}
+	return errGetStateSummaryFrontier
+}
+
+func (e *EngineTest) StateSummaryFrontier(ctx context.Context, validatorID ids.NodeID, requestID uint32, summary []byte) error {
+	if e.StateSummaryFrontierF != nil {
+		return e.StateSummaryFrontierF(ctx, validatorID, requestID, summary)
+	}
+	if !e.CantStateSummaryFrontier {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatalf("Unexpectedly called CantStateSummaryFrontier")
+	}
+	return errStateSummaryFrontier
+}
+
+func (e *EngineTest) GetStateSummaryFrontierFailed(ctx context.Context, validatorID ids.NodeID, requestID uint32) error {
+	if e.GetStateSummaryFrontierFailedF != nil {
+		return e.GetStateSummaryFrontierFailedF(ctx, validatorID, requestID)
+	}
+	if !e.CantGetStateSummaryFrontierFailed {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatalf("Unexpectedly called GetStateSummaryFrontierFailed")
+	}
+	return errGetStateSummaryFrontierFailed
+}
+
+func (e *EngineTest) GetAcceptedStateSummary(ctx context.Context, validatorID ids.NodeID, requestID uint32, keys []uint64) error {
+	if e.GetAcceptedStateSummaryF != nil {
+		return e.GetAcceptedStateSummaryF(ctx, validatorID, requestID, keys)
+	}
+	if !e.CantGetAcceptedStateSummary {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatalf("Unexpectedly called GetAcceptedStateSummary")
+	}
+	return errGetAcceptedStateSummary
+}
+
+func (e *EngineTest) AcceptedStateSummary(ctx context.Context, validatorID ids.NodeID, requestID uint32, summaryIDs []ids.ID) error {
+	if e.AcceptedStateSummaryF != nil {
+		return e.AcceptedStateSummaryF(ctx, validatorID, requestID, summaryIDs)
+	}
+	if !e.CantAcceptedStateSummary {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatalf("Unexpectedly called AcceptedStateSummary")
+	}
+	return errAcceptedStateSummary
+}
+
+func (e *EngineTest) GetAcceptedStateSummaryFailed(ctx context.Context, validatorID ids.NodeID, requestID uint32) error {
+	if e.GetAcceptedStateSummaryFailedF != nil {
+		return e.GetAcceptedStateSummaryFailedF(ctx, validatorID, requestID)
+	}
+	if !e.CantGetAcceptedStateSummaryFailed {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatalf("Unexpectedly called GetAcceptedStateSummaryFailed")
+	}
+	return errGetAcceptedStateSummaryFailed
+}
+
+func (e *EngineTest) GetAcceptedFrontier(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
 	if e.GetAcceptedFrontierF != nil {
-		return e.GetAcceptedFrontierF(nodeID, requestID)
+		return e.GetAcceptedFrontierF(ctx, nodeID, requestID)
 	}
 	if !e.CantGetAcceptedFrontier {
 		return nil
@@ -234,9 +358,9 @@ func (e *EngineTest) GetAcceptedFrontier(nodeID ids.ShortID, requestID uint32) e
 	return errGetAcceptedFrontier
 }
 
-func (e *EngineTest) GetAcceptedFrontierFailed(nodeID ids.ShortID, requestID uint32) error {
+func (e *EngineTest) GetAcceptedFrontierFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
 	if e.GetAcceptedFrontierFailedF != nil {
-		return e.GetAcceptedFrontierFailedF(nodeID, requestID)
+		return e.GetAcceptedFrontierFailedF(ctx, nodeID, requestID)
 	}
 	if !e.CantGetAcceptedFrontierFailed {
 		return nil
@@ -247,9 +371,9 @@ func (e *EngineTest) GetAcceptedFrontierFailed(nodeID ids.ShortID, requestID uin
 	return errGetAcceptedFrontierFailed
 }
 
-func (e *EngineTest) AcceptedFrontier(nodeID ids.ShortID, requestID uint32, containerIDs []ids.ID) error {
+func (e *EngineTest) AcceptedFrontier(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerIDs []ids.ID) error {
 	if e.AcceptedFrontierF != nil {
-		return e.AcceptedFrontierF(nodeID, requestID, containerIDs)
+		return e.AcceptedFrontierF(ctx, nodeID, requestID, containerIDs)
 	}
 	if !e.CantAcceptedFrontier {
 		return nil
@@ -260,9 +384,9 @@ func (e *EngineTest) AcceptedFrontier(nodeID ids.ShortID, requestID uint32, cont
 	return errAcceptedFrontier
 }
 
-func (e *EngineTest) GetAccepted(nodeID ids.ShortID, requestID uint32, containerIDs []ids.ID) error {
+func (e *EngineTest) GetAccepted(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerIDs []ids.ID) error {
 	if e.GetAcceptedF != nil {
-		return e.GetAcceptedF(nodeID, requestID, containerIDs)
+		return e.GetAcceptedF(ctx, nodeID, requestID, containerIDs)
 	}
 	if !e.CantGetAccepted {
 		return nil
@@ -273,9 +397,9 @@ func (e *EngineTest) GetAccepted(nodeID ids.ShortID, requestID uint32, container
 	return errGetAccepted
 }
 
-func (e *EngineTest) GetAcceptedFailed(nodeID ids.ShortID, requestID uint32) error {
+func (e *EngineTest) GetAcceptedFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
 	if e.GetAcceptedFailedF != nil {
-		return e.GetAcceptedFailedF(nodeID, requestID)
+		return e.GetAcceptedFailedF(ctx, nodeID, requestID)
 	}
 	if !e.CantGetAcceptedFailed {
 		return nil
@@ -286,9 +410,9 @@ func (e *EngineTest) GetAcceptedFailed(nodeID ids.ShortID, requestID uint32) err
 	return errGetAcceptedFailed
 }
 
-func (e *EngineTest) Accepted(nodeID ids.ShortID, requestID uint32, containerIDs []ids.ID) error {
+func (e *EngineTest) Accepted(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerIDs []ids.ID) error {
 	if e.AcceptedF != nil {
-		return e.AcceptedF(nodeID, requestID, containerIDs)
+		return e.AcceptedF(ctx, nodeID, requestID, containerIDs)
 	}
 	if !e.CantAccepted {
 		return nil
@@ -299,9 +423,9 @@ func (e *EngineTest) Accepted(nodeID ids.ShortID, requestID uint32, containerIDs
 	return errAccepted
 }
 
-func (e *EngineTest) Get(nodeID ids.ShortID, requestID uint32, containerID ids.ID) error {
+func (e *EngineTest) Get(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) error {
 	if e.GetF != nil {
-		return e.GetF(nodeID, requestID, containerID)
+		return e.GetF(ctx, nodeID, requestID, containerID)
 	}
 	if !e.CantGet {
 		return nil
@@ -312,9 +436,9 @@ func (e *EngineTest) Get(nodeID ids.ShortID, requestID uint32, containerID ids.I
 	return errGet
 }
 
-func (e *EngineTest) GetAncestors(nodeID ids.ShortID, requestID uint32, containerID ids.ID) error {
+func (e *EngineTest) GetAncestors(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) error {
 	if e.GetAncestorsF != nil {
-		return e.GetAncestorsF(nodeID, requestID, containerID)
+		return e.GetAncestorsF(ctx, nodeID, requestID, containerID)
 	}
 	if !e.CantGetAncestors {
 		return nil
@@ -325,9 +449,9 @@ func (e *EngineTest) GetAncestors(nodeID ids.ShortID, requestID uint32, containe
 	return errGetAncestors
 }
 
-func (e *EngineTest) GetFailed(nodeID ids.ShortID, requestID uint32) error {
+func (e *EngineTest) GetFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
 	if e.GetFailedF != nil {
-		return e.GetFailedF(nodeID, requestID)
+		return e.GetFailedF(ctx, nodeID, requestID)
 	}
 	if !e.CantGetFailed {
 		return nil
@@ -338,9 +462,9 @@ func (e *EngineTest) GetFailed(nodeID ids.ShortID, requestID uint32) error {
 	return errGetFailed
 }
 
-func (e *EngineTest) GetAncestorsFailed(nodeID ids.ShortID, requestID uint32) error {
+func (e *EngineTest) GetAncestorsFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
 	if e.GetAncestorsFailedF != nil {
-		return e.GetAncestorsFailedF(nodeID, requestID)
+		return e.GetAncestorsFailedF(ctx, nodeID, requestID)
 	}
 	if e.CantGetAncestorsFailed {
 		return nil
@@ -351,9 +475,9 @@ func (e *EngineTest) GetAncestorsFailed(nodeID ids.ShortID, requestID uint32) er
 	return errGetAncestorsFailed
 }
 
-func (e *EngineTest) Put(nodeID ids.ShortID, requestID uint32, container []byte) error {
+func (e *EngineTest) Put(ctx context.Context, nodeID ids.NodeID, requestID uint32, container []byte) error {
 	if e.PutF != nil {
-		return e.PutF(nodeID, requestID, container)
+		return e.PutF(ctx, nodeID, requestID, container)
 	}
 	if !e.CantPut {
 		return nil
@@ -364,9 +488,9 @@ func (e *EngineTest) Put(nodeID ids.ShortID, requestID uint32, container []byte)
 	return errPut
 }
 
-func (e *EngineTest) Ancestors(nodeID ids.ShortID, requestID uint32, containers [][]byte) error {
+func (e *EngineTest) Ancestors(ctx context.Context, nodeID ids.NodeID, requestID uint32, containers [][]byte) error {
 	if e.AncestorsF != nil {
-		return e.AncestorsF(nodeID, requestID, containers)
+		return e.AncestorsF(ctx, nodeID, requestID, containers)
 	}
 	if !e.CantAncestors {
 		return nil
@@ -377,9 +501,9 @@ func (e *EngineTest) Ancestors(nodeID ids.ShortID, requestID uint32, containers 
 	return errAncestors
 }
 
-func (e *EngineTest) PushQuery(nodeID ids.ShortID, requestID uint32, container []byte) error {
+func (e *EngineTest) PushQuery(ctx context.Context, nodeID ids.NodeID, requestID uint32, container []byte) error {
 	if e.PushQueryF != nil {
-		return e.PushQueryF(nodeID, requestID, container)
+		return e.PushQueryF(ctx, nodeID, requestID, container)
 	}
 	if !e.CantPushQuery {
 		return nil
@@ -390,9 +514,9 @@ func (e *EngineTest) PushQuery(nodeID ids.ShortID, requestID uint32, container [
 	return errPushQuery
 }
 
-func (e *EngineTest) PullQuery(nodeID ids.ShortID, requestID uint32, containerID ids.ID) error {
+func (e *EngineTest) PullQuery(ctx context.Context, nodeID ids.NodeID, requestID uint32, containerID ids.ID) error {
 	if e.PullQueryF != nil {
-		return e.PullQueryF(nodeID, requestID, containerID)
+		return e.PullQueryF(ctx, nodeID, requestID, containerID)
 	}
 	if !e.CantPullQuery {
 		return nil
@@ -403,9 +527,9 @@ func (e *EngineTest) PullQuery(nodeID ids.ShortID, requestID uint32, containerID
 	return errPullQuery
 }
 
-func (e *EngineTest) QueryFailed(nodeID ids.ShortID, requestID uint32) error {
+func (e *EngineTest) QueryFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
 	if e.QueryFailedF != nil {
-		return e.QueryFailedF(nodeID, requestID)
+		return e.QueryFailedF(ctx, nodeID, requestID)
 	}
 	if !e.CantQueryFailed {
 		return nil
@@ -416,9 +540,48 @@ func (e *EngineTest) QueryFailed(nodeID ids.ShortID, requestID uint32) error {
 	return errQueryFailed
 }
 
-func (e *EngineTest) AppRequest(nodeID ids.ShortID, requestID uint32, deadline time.Time, request []byte) error {
+func (e *EngineTest) CrossChainAppRequest(ctx context.Context, chainID ids.ID, requestID uint32, deadline time.Time, request []byte) error {
+	if e.CrossChainAppRequestF != nil {
+		return e.CrossChainAppRequestF(ctx, chainID, requestID, deadline, request)
+	}
+	if !e.CantCrossChainAppRequest {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatal(errCrossChainAppRequest)
+	}
+	return errCrossChainAppRequest
+}
+
+func (e *EngineTest) CrossChainAppRequestFailed(ctx context.Context, chainID ids.ID, requestID uint32) error {
+	if e.CrossChainAppRequestFailedF != nil {
+		return e.CrossChainAppRequestFailedF(ctx, chainID, requestID)
+	}
+	if !e.CantCrossChainAppRequestFailed {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatal(errCrossChainAppRequestFailed)
+	}
+	return errCrossChainAppRequestFailed
+}
+
+func (e *EngineTest) CrossChainAppResponse(ctx context.Context, chainID ids.ID, requestID uint32, response []byte) error {
+	if e.CrossChainAppResponseF != nil {
+		return e.CrossChainAppResponseF(ctx, chainID, requestID, response)
+	}
+	if !e.CantCrossChainAppResponse {
+		return nil
+	}
+	if e.T != nil {
+		e.T.Fatal(errCrossChainAppResponse)
+	}
+	return errCrossChainAppResponse
+}
+
+func (e *EngineTest) AppRequest(ctx context.Context, nodeID ids.NodeID, requestID uint32, deadline time.Time, request []byte) error {
 	if e.AppRequestF != nil {
-		return e.AppRequestF(nodeID, requestID, request)
+		return e.AppRequestF(ctx, nodeID, requestID, deadline, request)
 	}
 	if !e.CantAppRequest {
 		return nil
@@ -429,9 +592,9 @@ func (e *EngineTest) AppRequest(nodeID ids.ShortID, requestID uint32, deadline t
 	return errAppRequest
 }
 
-func (e *EngineTest) AppResponse(nodeID ids.ShortID, requestID uint32, response []byte) error {
+func (e *EngineTest) AppResponse(ctx context.Context, nodeID ids.NodeID, requestID uint32, response []byte) error {
 	if e.AppResponseF != nil {
-		return e.AppResponseF(nodeID, requestID, response)
+		return e.AppResponseF(ctx, nodeID, requestID, response)
 	}
 	if !e.CantAppResponse {
 		return nil
@@ -442,9 +605,9 @@ func (e *EngineTest) AppResponse(nodeID ids.ShortID, requestID uint32, response 
 	return errAppResponse
 }
 
-func (e *EngineTest) AppRequestFailed(nodeID ids.ShortID, requestID uint32) error {
+func (e *EngineTest) AppRequestFailed(ctx context.Context, nodeID ids.NodeID, requestID uint32) error {
 	if e.AppRequestFailedF != nil {
-		return e.AppRequestFailedF(nodeID, requestID)
+		return e.AppRequestFailedF(ctx, nodeID, requestID)
 	}
 	if !e.CantAppRequestFailed {
 		return nil
@@ -455,9 +618,9 @@ func (e *EngineTest) AppRequestFailed(nodeID ids.ShortID, requestID uint32) erro
 	return errAppRequestFailed
 }
 
-func (e *EngineTest) AppGossip(nodeID ids.ShortID, msg []byte) error {
+func (e *EngineTest) AppGossip(ctx context.Context, nodeID ids.NodeID, msg []byte) error {
 	if e.AppGossipF != nil {
-		return e.AppGossipF(nodeID, msg)
+		return e.AppGossipF(ctx, nodeID, msg)
 	}
 	if !e.CantAppGossip {
 		return nil
@@ -468,9 +631,9 @@ func (e *EngineTest) AppGossip(nodeID ids.ShortID, msg []byte) error {
 	return errAppGossip
 }
 
-func (e *EngineTest) Chits(nodeID ids.ShortID, requestID uint32, containerIDs []ids.ID) error {
+func (e *EngineTest) Chits(ctx context.Context, nodeID ids.NodeID, requestID uint32, preferredIDs []ids.ID, acceptedIDs []ids.ID) error {
 	if e.ChitsF != nil {
-		return e.ChitsF(nodeID, requestID, containerIDs)
+		return e.ChitsF(ctx, nodeID, requestID, preferredIDs, acceptedIDs)
 	}
 	if !e.CantChits {
 		return nil
@@ -481,9 +644,9 @@ func (e *EngineTest) Chits(nodeID ids.ShortID, requestID uint32, containerIDs []
 	return errChits
 }
 
-func (e *EngineTest) Connected(nodeID ids.ShortID, nodeVersion version.Application) error {
+func (e *EngineTest) Connected(ctx context.Context, nodeID ids.NodeID, nodeVersion *version.Application) error {
 	if e.ConnectedF != nil {
-		return e.ConnectedF(nodeID, nodeVersion)
+		return e.ConnectedF(ctx, nodeID, nodeVersion)
 	}
 	if !e.CantConnected {
 		return nil
@@ -494,9 +657,9 @@ func (e *EngineTest) Connected(nodeID ids.ShortID, nodeVersion version.Applicati
 	return errConnected
 }
 
-func (e *EngineTest) Disconnected(nodeID ids.ShortID) error {
+func (e *EngineTest) Disconnected(ctx context.Context, nodeID ids.NodeID) error {
 	if e.DisconnectedF != nil {
-		return e.DisconnectedF(nodeID)
+		return e.DisconnectedF(ctx, nodeID)
 	}
 	if !e.CantDisconnected {
 		return nil
@@ -507,11 +670,14 @@ func (e *EngineTest) Disconnected(nodeID ids.ShortID) error {
 	return errDisconnected
 }
 
-func (e *EngineTest) HealthCheck() (interface{}, error) {
+func (e *EngineTest) HealthCheck(ctx context.Context) (interface{}, error) {
 	if e.HealthF != nil {
-		return e.HealthF()
+		return e.HealthF(ctx)
 	}
-	if e.CantHealth && e.T != nil {
+	if !e.CantHealth {
+		return nil, nil
+	}
+	if e.T != nil {
 		e.T.Fatal(errHealthCheck)
 	}
 	return nil, errHealthCheck

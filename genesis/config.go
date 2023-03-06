@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package genesis
@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 
 	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/constants"
-	"github.com/ava-labs/avalanchego/utils/formatting"
+	"github.com/ava-labs/avalanchego/utils/formatting/address"
+	"github.com/ava-labs/avalanchego/utils/math"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
-
-	safemath "github.com/ava-labs/avalanchego/utils/math"
 )
+
+var _ utils.Sortable[Allocation] = Allocation{}
 
 type LockedAmount struct {
 	Amount   uint64 `json:"amount"`
@@ -37,7 +39,7 @@ func (a Allocation) Unparse(networkID uint32) (UnparsedAllocation, error) {
 		UnlockSchedule: a.UnlockSchedule,
 		ETHAddr:        "0x" + hex.EncodeToString(a.ETHAddr.Bytes()),
 	}
-	avaxAddr, err := formatting.FormatAddress(
+	avaxAddr, err := address.Format(
 		"X",
 		constants.GetHRP(networkID),
 		a.AVAXAddr.Bytes(),
@@ -46,20 +48,25 @@ func (a Allocation) Unparse(networkID uint32) (UnparsedAllocation, error) {
 	return ua, err
 }
 
+func (a Allocation) Less(other Allocation) bool {
+	return a.InitialAmount < other.InitialAmount ||
+		(a.InitialAmount == other.InitialAmount && a.AVAXAddr.Less(other.AVAXAddr))
+}
+
 type Staker struct {
-	NodeID        ids.ShortID `json:"nodeID"`
+	NodeID        ids.NodeID  `json:"nodeID"`
 	RewardAddress ids.ShortID `json:"rewardAddress"`
 	DelegationFee uint32      `json:"delegationFee"`
 }
 
 func (s Staker) Unparse(networkID uint32) (UnparsedStaker, error) {
-	avaxAddr, err := formatting.FormatAddress(
+	avaxAddr, err := address.Format(
 		"X",
 		constants.GetHRP(networkID),
 		s.RewardAddress.Bytes(),
 	)
 	return UnparsedStaker{
-		NodeID:        s.NodeID.PrefixedString(constants.NodeIDPrefix),
+		NodeID:        s.NodeID,
 		RewardAddress: avaxAddr,
 		DelegationFee: s.DelegationFee,
 	}, err
@@ -102,7 +109,7 @@ func (c Config) Unparse() (UnparsedConfig, error) {
 		uc.Allocations[i] = ua
 	}
 	for i, isa := range c.InitialStakedFunds {
-		avaxAddr, err := formatting.FormatAddress(
+		avaxAddr, err := address.Format(
 			"X",
 			constants.GetHRP(uc.NetworkID),
 			isa.Bytes(),
@@ -126,12 +133,12 @@ func (c Config) Unparse() (UnparsedConfig, error) {
 func (c *Config) InitialSupply() (uint64, error) {
 	initialSupply := uint64(0)
 	for _, allocation := range c.Allocations {
-		newInitialSupply, err := safemath.Add64(initialSupply, allocation.InitialAmount)
+		newInitialSupply, err := math.Add64(initialSupply, allocation.InitialAmount)
 		if err != nil {
 			return 0, err
 		}
 		for _, unlock := range allocation.UnlockSchedule {
-			newInitialSupply, err = safemath.Add64(newInitialSupply, unlock.Amount)
+			newInitialSupply, err = math.Add64(newInitialSupply, unlock.Amount)
 			if err != nil {
 				return 0, err
 			}
@@ -162,9 +169,9 @@ func init() {
 
 	errs := wrappers.Errs{}
 	errs.Add(
-		json.Unmarshal([]byte(mainnetGenesisConfigJSON), &unparsedMainnetConfig),
-		json.Unmarshal([]byte(fujiGenesisConfigJSON), &unparsedFujiConfig),
-		json.Unmarshal([]byte(localGenesisConfigJSON), &unparsedLocalConfig),
+		json.Unmarshal(mainnetGenesisConfigJSON, &unparsedMainnetConfig),
+		json.Unmarshal(fujiGenesisConfigJSON, &unparsedFujiConfig),
+		json.Unmarshal(localGenesisConfigJSON, &unparsedLocalConfig),
 	)
 	if errs.Errored() {
 		panic(errs.Err)

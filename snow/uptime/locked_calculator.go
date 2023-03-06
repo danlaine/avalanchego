@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package uptime
@@ -15,18 +15,18 @@ import (
 var (
 	errNotReady = errors.New("should not be called")
 
-	_ LockedCalculator = &lockedCalculator{}
+	_ LockedCalculator = (*lockedCalculator)(nil)
 )
 
 type LockedCalculator interface {
 	Calculator
 
-	SetCalculator(isBootstrapped *utils.AtomicBool, lock sync.Locker, newC Calculator)
+	SetCalculator(isBootstrapped *utils.Atomic[bool], lock sync.Locker, newC Calculator)
 }
 
 type lockedCalculator struct {
 	lock           sync.RWMutex
-	isBootstrapped *utils.AtomicBool
+	isBootstrapped *utils.Atomic[bool]
 	calculatorLock sync.Locker
 	c              Calculator
 }
@@ -35,49 +35,49 @@ func NewLockedCalculator() LockedCalculator {
 	return &lockedCalculator{}
 }
 
-func (c *lockedCalculator) CalculateUptime(nodeID ids.ShortID) (time.Duration, time.Time, error) {
+func (c *lockedCalculator) CalculateUptime(nodeID ids.NodeID, subnetID ids.ID) (time.Duration, time.Time, error) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	if c.isBootstrapped == nil || !c.isBootstrapped.GetValue() {
+	if c.isBootstrapped == nil || !c.isBootstrapped.Get() {
 		return 0, time.Time{}, errNotReady
 	}
 
 	c.calculatorLock.Lock()
 	defer c.calculatorLock.Unlock()
 
-	return c.c.CalculateUptime(nodeID)
+	return c.c.CalculateUptime(nodeID, subnetID)
 }
 
-func (c *lockedCalculator) CalculateUptimePercent(nodeID ids.ShortID) (float64, error) {
+func (c *lockedCalculator) CalculateUptimePercent(nodeID ids.NodeID, subnetID ids.ID) (float64, error) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	if c.isBootstrapped == nil || !c.isBootstrapped.GetValue() {
+	if c.isBootstrapped == nil || !c.isBootstrapped.Get() {
 		return 0, errNotReady
 	}
 
 	c.calculatorLock.Lock()
 	defer c.calculatorLock.Unlock()
 
-	return c.c.CalculateUptimePercent(nodeID)
+	return c.c.CalculateUptimePercent(nodeID, subnetID)
 }
 
-func (c *lockedCalculator) CalculateUptimePercentFrom(nodeID ids.ShortID, startTime time.Time) (float64, error) {
+func (c *lockedCalculator) CalculateUptimePercentFrom(nodeID ids.NodeID, subnetID ids.ID, startTime time.Time) (float64, error) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	if c.isBootstrapped == nil || !c.isBootstrapped.GetValue() {
+	if c.isBootstrapped == nil || !c.isBootstrapped.Get() {
 		return 0, errNotReady
 	}
 
 	c.calculatorLock.Lock()
 	defer c.calculatorLock.Unlock()
 
-	return c.c.CalculateUptimePercentFrom(nodeID, startTime)
+	return c.c.CalculateUptimePercentFrom(nodeID, subnetID, startTime)
 }
 
-func (c *lockedCalculator) SetCalculator(isBootstrapped *utils.AtomicBool, lock sync.Locker, newC Calculator) {
+func (c *lockedCalculator) SetCalculator(isBootstrapped *utils.Atomic[bool], lock sync.Locker, newC Calculator) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 

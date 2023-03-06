@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package secp256k1fx
@@ -8,7 +8,8 @@ import (
 	"fmt"
 
 	"github.com/ava-labs/avalanchego/cache"
-	"github.com/ava-labs/avalanchego/utils/crypto"
+	"github.com/ava-labs/avalanchego/ids"
+	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
 	"github.com/ava-labs/avalanchego/utils/hashing"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/avalanchego/vms/components/verify"
@@ -33,12 +34,13 @@ var (
 	errTooFewSigners                  = errors.New("input has less signers than expected")
 	errInputOutputIndexOutOfBounds    = errors.New("input referenced a nonexistent address in the output")
 	errInputCredentialSignersMismatch = errors.New("input expected a different number of signers than provided in the credential")
+	errWrongSig                       = errors.New("wrong signature")
 )
 
 // Fx describes the secp256k1 feature extension
 type Fx struct {
 	VM           VM
-	SECPFactory  crypto.FactorySECP256K1R
+	SECPFactory  secp256k1.Factory
 	bootstrapped bool
 }
 
@@ -48,10 +50,12 @@ func (fx *Fx) Initialize(vmIntf interface{}) error {
 	}
 
 	log := fx.VM.Logger()
-	log.Debug("initializing secp561k1 fx")
+	log.Debug("initializing secp256k1 fx")
 
-	fx.SECPFactory = crypto.FactorySECP256K1R{
-		Cache: cache.LRU{Size: defaultCacheSize},
+	fx.SECPFactory = secp256k1.Factory{
+		Cache: cache.LRU[ids.ID, *secp256k1.PublicKey]{
+			Size: defaultCacheSize,
+		},
 	}
 	c := fx.VM.CodecRegistry()
 	errs := wrappers.Errs{}
@@ -74,13 +78,18 @@ func (fx *Fx) InitializeVM(vmIntf interface{}) error {
 	return nil
 }
 
-func (fx *Fx) Bootstrapping() error { return nil }
+func (*Fx) Bootstrapping() error {
+	return nil
+}
 
-func (fx *Fx) Bootstrapped() error { fx.bootstrapped = true; return nil }
+func (fx *Fx) Bootstrapped() error {
+	fx.bootstrapped = true
+	return nil
+}
 
 // VerifyPermission returns nil iff [credIntf] proves that [controlGroup] assents to [txIntf]
 func (fx *Fx) VerifyPermission(txIntf, inIntf, credIntf, ownerIntf interface{}) error {
-	tx, ok := txIntf.(Tx)
+	tx, ok := txIntf.(UnsignedTx)
 	if !ok {
 		return errWrongTxType
 	}
@@ -103,7 +112,7 @@ func (fx *Fx) VerifyPermission(txIntf, inIntf, credIntf, ownerIntf interface{}) 
 }
 
 func (fx *Fx) VerifyOperation(txIntf, opIntf, credIntf interface{}, utxosIntf []interface{}) error {
-	tx, ok := txIntf.(Tx)
+	tx, ok := txIntf.(UnsignedTx)
 	if !ok {
 		return errWrongTxType
 	}
@@ -125,7 +134,7 @@ func (fx *Fx) VerifyOperation(txIntf, opIntf, credIntf interface{}, utxosIntf []
 	return fx.verifyOperation(tx, op, cred, out)
 }
 
-func (fx *Fx) verifyOperation(tx Tx, op *MintOperation, cred *Credential, utxo *MintOutput) error {
+func (fx *Fx) verifyOperation(tx UnsignedTx, op *MintOperation, cred *Credential, utxo *MintOutput) error {
 	if err := verify.All(op, cred, utxo); err != nil {
 		return err
 	}
@@ -136,7 +145,7 @@ func (fx *Fx) verifyOperation(tx Tx, op *MintOperation, cred *Credential, utxo *
 }
 
 func (fx *Fx) VerifyTransfer(txIntf, inIntf, credIntf, utxoIntf interface{}) error {
-	tx, ok := txIntf.(Tx)
+	tx, ok := txIntf.(UnsignedTx)
 	if !ok {
 		return errWrongTxType
 	}
@@ -156,19 +165,19 @@ func (fx *Fx) VerifyTransfer(txIntf, inIntf, credIntf, utxoIntf interface{}) err
 }
 
 // VerifySpend ensures that the utxo can be sent to any address
-func (fx *Fx) VerifySpend(tx Tx, in *TransferInput, cred *Credential, utxo *TransferOutput) error {
+func (fx *Fx) VerifySpend(utx UnsignedTx, in *TransferInput, cred *Credential, utxo *TransferOutput) error {
 	if err := verify.All(utxo, in, cred); err != nil {
 		return err
 	} else if utxo.Amt != in.Amt {
 		return fmt.Errorf("utxo amount and input amount should be same but are %d and %d", utxo.Amt, in.Amt)
 	}
 
-	return fx.VerifyCredentials(tx, &in.Input, cred, &utxo.OutputOwners)
+	return fx.VerifyCredentials(utx, &in.Input, cred, &utxo.OutputOwners)
 }
 
 // VerifyCredentials ensures that the output can be spent by the input with the
 // credential. A nil return values means the output can be spent.
-func (fx *Fx) VerifyCredentials(tx Tx, in *Input, cred *Credential, out *OutputOwners) error {
+func (fx *Fx) VerifyCredentials(utx UnsignedTx, in *Input, cred *Credential, out *OutputOwners) error {
 	numSigs := len(in.SigIndices)
 	switch {
 	case out.Locktime > fx.VM.Clock().Unix():
@@ -183,7 +192,7 @@ func (fx *Fx) VerifyCredentials(tx Tx, in *Input, cred *Credential, out *OutputO
 		return nil
 	}
 
-	txHash := hashing.ComputeHash256(tx.UnsignedBytes())
+	txHash := hashing.ComputeHash256(utx.Bytes())
 	for i, index := range in.SigIndices {
 		// Make sure the input references an address that exists
 		if index >= uint32(len(out.Addrs)) {
@@ -197,7 +206,8 @@ func (fx *Fx) VerifyCredentials(tx Tx, in *Input, cred *Credential, out *OutputO
 			return err
 		}
 		if expectedAddress := out.Addrs[index]; expectedAddress != pk.Address() {
-			return fmt.Errorf("expected signature from %s but got from %s",
+			return fmt.Errorf("%w: expected signature from %s but got from %s",
+				errWrongSig,
 				expectedAddress,
 				pk.Address())
 		}
@@ -208,7 +218,7 @@ func (fx *Fx) VerifyCredentials(tx Tx, in *Input, cred *Credential, out *OutputO
 
 // CreateOutput creates a new output with the provided control group worth
 // the specified amount
-func (fx *Fx) CreateOutput(amount uint64, ownerIntf interface{}) (interface{}, error) {
+func (*Fx) CreateOutput(amount uint64, ownerIntf interface{}) (interface{}, error) {
 	owner, ok := ownerIntf.(*OutputOwners)
 	if !ok {
 		return nil, errWrongOwnerType

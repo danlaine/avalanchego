@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package appsender
@@ -10,14 +10,15 @@ import (
 
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/engine/common"
+	"github.com/ava-labs/avalanchego/utils/set"
 
 	appsenderpb "github.com/ava-labs/avalanchego/proto/pb/appsender"
 )
 
-var _ appsenderpb.AppSenderServer = &Server{}
+var _ appsenderpb.AppSenderServer = (*Server)(nil)
 
 type Server struct {
-	appsenderpb.UnimplementedAppSenderServer
+	appsenderpb.UnsafeAppSenderServer
 	appSender common.AppSender
 }
 
@@ -26,42 +27,60 @@ func NewServer(appSender common.AppSender) *Server {
 	return &Server{appSender: appSender}
 }
 
-func (s *Server) SendAppRequest(_ context.Context, req *appsenderpb.SendAppRequestMsg) (*emptypb.Empty, error) {
-	nodeIDs := ids.NewShortSet(len(req.NodeIds))
+func (s *Server) SendCrossChainAppRequest(ctx context.Context, msg *appsenderpb.SendCrossChainAppRequestMsg) (*emptypb.Empty, error) {
+	chainID, err := ids.ToID(msg.ChainId)
+	if err != nil {
+		return &emptypb.Empty{}, err
+	}
+
+	return &emptypb.Empty{}, s.appSender.SendCrossChainAppRequest(ctx, chainID, msg.RequestId, msg.Request)
+}
+
+func (s *Server) SendCrossChainAppResponse(ctx context.Context, msg *appsenderpb.SendCrossChainAppResponseMsg) (*emptypb.Empty, error) {
+	chainID, err := ids.ToID(msg.ChainId)
+	if err != nil {
+		return &emptypb.Empty{}, err
+	}
+
+	return &emptypb.Empty{}, s.appSender.SendCrossChainAppResponse(ctx, chainID, msg.RequestId, msg.Response)
+}
+
+func (s *Server) SendAppRequest(ctx context.Context, req *appsenderpb.SendAppRequestMsg) (*emptypb.Empty, error) {
+	nodeIDs := set.NewSet[ids.NodeID](len(req.NodeIds))
 	for _, nodeIDBytes := range req.NodeIds {
-		nodeID, err := ids.ToShortID(nodeIDBytes)
+		nodeID, err := ids.ToNodeID(nodeIDBytes)
 		if err != nil {
 			return nil, err
 		}
 		nodeIDs.Add(nodeID)
 	}
-	err := s.appSender.SendAppRequest(nodeIDs, req.RequestId, req.Request)
+	err := s.appSender.SendAppRequest(ctx, nodeIDs, req.RequestId, req.Request)
 	return &emptypb.Empty{}, err
 }
 
-func (s *Server) SendAppResponse(_ context.Context, req *appsenderpb.SendAppResponseMsg) (*emptypb.Empty, error) {
-	nodeID, err := ids.ToShortID(req.NodeId)
+func (s *Server) SendAppResponse(ctx context.Context, req *appsenderpb.SendAppResponseMsg) (*emptypb.Empty, error) {
+	nodeID, err := ids.ToNodeID(req.NodeId)
 	if err != nil {
 		return nil, err
 	}
-	err = s.appSender.SendAppResponse(nodeID, req.RequestId, req.Response)
+	err = s.appSender.SendAppResponse(ctx, nodeID, req.RequestId, req.Response)
 	return &emptypb.Empty{}, err
 }
 
-func (s *Server) SendAppGossip(_ context.Context, req *appsenderpb.SendAppGossipMsg) (*emptypb.Empty, error) {
-	err := s.appSender.SendAppGossip(req.Msg)
+func (s *Server) SendAppGossip(ctx context.Context, req *appsenderpb.SendAppGossipMsg) (*emptypb.Empty, error) {
+	err := s.appSender.SendAppGossip(ctx, req.Msg)
 	return &emptypb.Empty{}, err
 }
 
-func (s *Server) SendAppGossipSpecific(_ context.Context, req *appsenderpb.SendAppGossipSpecificMsg) (*emptypb.Empty, error) {
-	nodeIDs := ids.NewShortSet(len(req.NodeIds))
+func (s *Server) SendAppGossipSpecific(ctx context.Context, req *appsenderpb.SendAppGossipSpecificMsg) (*emptypb.Empty, error) {
+	nodeIDs := set.NewSet[ids.NodeID](len(req.NodeIds))
 	for _, nodeIDBytes := range req.NodeIds {
-		nodeID, err := ids.ToShortID(nodeIDBytes)
+		nodeID, err := ids.ToNodeID(nodeIDBytes)
 		if err != nil {
 			return nil, err
 		}
 		nodeIDs.Add(nodeID)
 	}
-	err := s.appSender.SendAppGossipSpecific(nodeIDs, req.Msg)
+	err := s.appSender.SendAppGossipSpecific(ctx, nodeIDs, req.Msg)
 	return &emptypb.Empty{}, err
 }

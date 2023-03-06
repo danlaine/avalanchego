@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package handler
@@ -7,25 +7,24 @@ import (
 	"errors"
 
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/avalanchego/message"
+	"github.com/ava-labs/avalanchego/utils/set"
 )
 
-var errDuplicatedContainerID = errors.New("inbound message contains duplicated container ID")
+var errDuplicatedID = errors.New("inbound message contains duplicated ID")
 
-func getContainerIDs(msg message.InboundMessage) ([]ids.ID, error) {
-	containerIDsBytes := msg.Get(message.ContainerIDs).([][]byte)
-	res := make([]ids.ID, len(containerIDsBytes))
-	idSet := ids.NewSet(len(containerIDsBytes))
-	for i, containerIDBytes := range containerIDsBytes {
-		containerID, err := ids.ToID(containerIDBytes)
+func getIDs(idsBytes [][]byte) ([]ids.ID, error) {
+	res := make([]ids.ID, len(idsBytes))
+	idSet := set.NewSet[ids.ID](len(idsBytes))
+	for i, bytes := range idsBytes {
+		id, err := ids.ToID(bytes)
 		if err != nil {
 			return nil, err
 		}
-		if idSet.Contains(containerID) {
-			return nil, errDuplicatedContainerID
+		if idSet.Contains(id) {
+			return nil, errDuplicatedID
 		}
-		res[i] = containerID
-		idSet.Add(containerID)
+		res[i] = id
+		idSet.Add(id)
 	}
 	return res, nil
 }

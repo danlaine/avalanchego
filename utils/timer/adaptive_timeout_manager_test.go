@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package timer
@@ -10,10 +10,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ava-labs/avalanchego/ids"
-	"github.com/ava-labs/avalanchego/message"
 )
 
 // Test that Initialize works
@@ -85,19 +84,17 @@ func TestAdaptiveTimeoutManagerInit(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		tm := AdaptiveTimeoutManager{}
-		err := tm.Initialize(&test.config, "", prometheus.NewRegistry())
+		_, err := NewAdaptiveTimeoutManager(&test.config, "", prometheus.NewRegistry())
 		if err != nil && test.shouldErrWith == "" {
-			assert.FailNow(t, "error from valid config", err)
+			require.FailNow(t, "error from valid config", err)
 		} else if err == nil && test.shouldErrWith != "" {
-			assert.FailNowf(t, "should have errored", test.shouldErrWith)
+			require.FailNowf(t, "should have errored", test.shouldErrWith)
 		}
 	}
 }
 
 func TestAdaptiveTimeoutManager(t *testing.T) {
-	tm := AdaptiveTimeoutManager{}
-	err := tm.Initialize(
+	tm, err := NewAdaptiveTimeoutManager(
 		&AdaptiveTimeoutConfig{
 			InitialTimeout:     time.Millisecond,
 			MinimumTimeout:     time.Millisecond,
@@ -127,14 +124,14 @@ func TestAdaptiveTimeoutManager(t *testing.T) {
 
 		numSuccessful--
 		if numSuccessful > 0 {
-			tm.Put(ids.ID{byte(numSuccessful)}, message.PullQuery, *callback)
+			tm.Put(ids.RequestID{Op: byte(numSuccessful)}, true, *callback)
 		}
 		if numSuccessful >= 0 {
 			wg.Done()
 		}
 		if numSuccessful%2 == 0 {
-			tm.Remove(ids.ID{byte(numSuccessful)})
-			tm.Put(ids.ID{byte(numSuccessful)}, message.PullQuery, *callback)
+			tm.Remove(ids.RequestID{Op: byte(numSuccessful)})
+			tm.Put(ids.RequestID{Op: byte(numSuccessful)}, true, *callback)
 		}
 	}
 	(*callback)()

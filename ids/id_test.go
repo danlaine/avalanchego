@@ -1,12 +1,17 @@
-// Copyright (C) 2019-2021, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package ids
 
 import (
 	"bytes"
+	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/ava-labs/avalanchego/utils"
 )
 
 func TestID(t *testing.T) {
@@ -174,7 +179,7 @@ func TestSortIDs(t *testing.T) {
 		{'W', 'a', 'l', 'l', 'e', ' ', 'l', 'a', 'b', 's'},
 		{'a', 'v', 'a', ' ', 'l', 'a', 'b', 's'},
 	}
-	SortIDs(ids)
+	utils.Sort(ids)
 	expected := []ID{
 		{'W', 'a', 'l', 'l', 'e', ' ', 'l', 'a', 'b', 's'},
 		{'a', 'v', 'a', ' ', 'l', 'a', 'b', 's'},
@@ -185,26 +190,52 @@ func TestSortIDs(t *testing.T) {
 	}
 }
 
-func TestIsSortedAndUnique(t *testing.T) {
-	unsorted := []ID{
-		{'e', 'v', 'a', ' ', 'l', 'a', 'b', 's'},
-		{'a', 'v', 'a', ' ', 'l', 'a', 'b', 's'},
+func TestIDMapMarshalling(t *testing.T) {
+	originalMap := map[ID]int{
+		{'e', 'v', 'a', ' ', 'l', 'a', 'b', 's'}: 1,
+		{'a', 'v', 'a', ' ', 'l', 'a', 'b', 's'}: 2,
 	}
-	if IsSortedAndUniqueIDs(unsorted) {
-		t.Fatal("Wrongly accepted unsorted IDs")
+	mapJSON, err := json.Marshal(originalMap)
+	if err != nil {
+		t.Fatal(err)
 	}
-	duplicated := []ID{
-		{'a', 'v', 'a', ' ', 'l', 'a', 'b', 's'},
-		{'a', 'v', 'a', ' ', 'l', 'a', 'b', 's'},
+
+	var unmarshalledMap map[ID]int
+	err = json.Unmarshal(mapJSON, &unmarshalledMap)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if IsSortedAndUniqueIDs(duplicated) {
-		t.Fatal("Wrongly accepted duplicated IDs")
+
+	if len(originalMap) != len(unmarshalledMap) {
+		t.Fatalf("wrong map lengths")
 	}
-	sorted := []ID{
-		{'a', 'v', 'a', ' ', 'l', 'a', 'b', 's'},
-		{'e', 'v', 'a', ' ', 'l', 'a', 'b', 's'},
+	for originalID, num := range originalMap {
+		if unmarshalledMap[originalID] != num {
+			t.Fatalf("map was incorrectly Unmarshalled")
+		}
 	}
-	if !IsSortedAndUniqueIDs(sorted) {
-		t.Fatal("Wrongly rejected sorted, unique IDs")
-	}
+}
+
+func TestIDLess(t *testing.T) {
+	require := require.New(t)
+
+	id1 := ID{}
+	id2 := ID{}
+	require.False(id1.Less(id2))
+	require.False(id2.Less(id1))
+
+	id1 = ID{1}
+	id2 = ID{0}
+	require.False(id1.Less(id2))
+	require.True(id2.Less(id1))
+
+	id1 = ID{1}
+	id2 = ID{1}
+	require.False(id1.Less(id2))
+	require.False(id2.Less(id1))
+
+	id1 = ID{1, 0}
+	id2 = ID{1, 2}
+	require.True(id1.Less(id2))
+	require.False(id2.Less(id1))
 }

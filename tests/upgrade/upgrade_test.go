@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 // Runs upgrade tests.
@@ -16,6 +16,7 @@ import (
 	"github.com/onsi/gomega"
 
 	runner_sdk "github.com/ava-labs/avalanche-network-runner-sdk"
+
 	"github.com/ava-labs/avalanchego/tests"
 )
 

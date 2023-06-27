@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package queue
@@ -104,8 +104,7 @@ func TestPushAndExecute(t *testing.T) {
 	require.NoError(err)
 	require.True(has)
 
-	err = jobs.Commit()
-	require.NoError(err)
+	require.NoError(jobs.Commit())
 
 	jobs, err = New(db, "", prometheus.NewRegistry())
 	require.NoError(err)
@@ -233,8 +232,7 @@ func TestDuplicatedExecutablePush(t *testing.T) {
 	require.False(pushed)
 	require.NoError(err)
 
-	err = jobs.Commit()
-	require.NoError(err)
+	require.NoError(jobs.Commit())
 
 	jobs, err = New(db, "", prometheus.NewRegistry())
 	require.NoError(err)
@@ -267,8 +265,7 @@ func TestDuplicatedNotExecutablePush(t *testing.T) {
 	require.False(pushed)
 	require.NoError(err)
 
-	err = jobs.Commit()
-	require.NoError(err)
+	require.NoError(jobs.Commit())
 
 	jobs, err = New(db, "", prometheus.NewRegistry())
 	require.NoError(err)
@@ -296,8 +293,7 @@ func TestMissingJobs(t *testing.T) {
 	jobs.AddMissingID(job0ID)
 	jobs.AddMissingID(job1ID)
 
-	err = jobs.Commit()
-	require.NoError(err)
+	require.NoError(jobs.Commit())
 
 	numMissingIDs := jobs.NumMissingIDs()
 	require.Equal(2, numMissingIDs)
@@ -313,8 +309,7 @@ func TestMissingJobs(t *testing.T) {
 
 	jobs.RemoveMissingID(job1ID)
 
-	err = jobs.Commit()
-	require.NoError(err)
+	require.NoError(jobs.Commit())
 
 	jobs, err = NewWithMissing(db, "", prometheus.NewRegistry())
 	require.NoError(err)
@@ -390,7 +385,7 @@ func TestHandleJobWithMissingDependencyOnRunnableStack(t *testing.T) {
 	_, err = jobs.ExecuteAll(context.Background(), snow.DefaultConsensusContextTest(), &common.Halter{}, false)
 	// Assert that the database closed error on job1 causes ExecuteAll
 	// to fail in the middle of execution.
-	require.Error(err)
+	require.ErrorIs(err, database.ErrClosed)
 	require.True(executed0)
 	require.False(executed1)
 
@@ -411,7 +406,7 @@ func TestHandleJobWithMissingDependencyOnRunnableStack(t *testing.T) {
 	}
 
 	missingIDs := jobs.MissingIDs()
-	require.Equal(1, len(missingIDs))
+	require.Len(missingIDs, 1)
 
 	require.Equal(missingIDs[0], job0.ID())
 
@@ -482,27 +477,22 @@ func TestInitializeNumJobs(t *testing.T) {
 	pushed, err := jobs.Push(context.Background(), job0)
 	require.True(pushed)
 	require.NoError(err)
-	require.EqualValues(1, jobs.state.numJobs)
+	require.Equal(uint64(1), jobs.state.numJobs)
 
 	pushed, err = jobs.Push(context.Background(), job1)
 	require.True(pushed)
 	require.NoError(err)
-	require.EqualValues(2, jobs.state.numJobs)
+	require.Equal(uint64(2), jobs.state.numJobs)
 
-	err = jobs.Commit()
-	require.NoError(err)
-
-	err = database.Clear(jobs.state.metadataDB, jobs.state.metadataDB)
-	require.NoError(err)
-
-	err = jobs.Commit()
-	require.NoError(err)
+	require.NoError(jobs.Commit())
+	require.NoError(database.Clear(jobs.state.metadataDB, jobs.state.metadataDB))
+	require.NoError(jobs.Commit())
 
 	jobs, err = NewWithMissing(db, "", prometheus.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
-	require.EqualValues(2, jobs.state.numJobs)
+	require.Equal(uint64(2), jobs.state.numJobs)
 }
 
 func TestClearAll(t *testing.T) {

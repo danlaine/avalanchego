@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package app
@@ -135,10 +135,8 @@ func (a *app) Start() error {
 	}
 
 	// Track if sybil control is enforced
-	if !a.config.EnableStaking {
-		log.Warn("sybil control is not enforced",
-			zap.String("reason", "staking is disabled"),
-		)
+	if !a.config.SybilProtectionEnabled {
+		log.Warn("sybil control is not enforced")
 	}
 
 	// TODO move this to config

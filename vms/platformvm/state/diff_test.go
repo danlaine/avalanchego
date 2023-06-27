@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package state
@@ -467,7 +467,7 @@ func TestDiffUTXO(t *testing.T) {
 
 		// Make sure it's gone
 		_, err = d.GetUTXO(utxo.InputID())
-		require.Error(err)
+		require.ErrorIs(err, database.ErrNotFound)
 	}
 }
 

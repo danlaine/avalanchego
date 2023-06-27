@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package merkledb
@@ -12,32 +12,35 @@ import (
 
 // A cache that calls [onEviction] on the evicted element.
 type onEvictCache[K comparable, V any] struct {
-	lock    sync.Mutex
-	maxSize int
-	// LRU --> MRU from left to right.
-	lru        linkedhashmap.LinkedHashmap[K, V]
+	lock       sync.RWMutex
+	maxSize    int
+	fifo       linkedhashmap.LinkedHashmap[K, V]
 	onEviction func(V) error
 }
 
 func newOnEvictCache[K comparable, V any](maxSize int, onEviction func(V) error) onEvictCache[K, V] {
 	return onEvictCache[K, V]{
 		maxSize:    maxSize,
-		lru:        linkedhashmap.New[K, V](),
+		fifo:       linkedhashmap.New[K, V](),
 		onEviction: onEviction,
 	}
 }
 
+// removeOldest returns and removes the oldest element from this cache.
+func (c *onEvictCache[K, V]) removeOldest() (K, V, bool) {
+	k, v, exists := c.fifo.Oldest()
+	if exists {
+		c.fifo.Delete(k)
+	}
+	return k, v, exists
+}
+
 // Get an element from this cache.
 func (c *onEvictCache[K, V]) Get(key K) (V, bool) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 
-	val, ok := c.lru.Get(key)
-	if ok {
-		// This key was touched; move it to the MRU position.
-		c.lru.Put(key, val)
-	}
-	return val, ok
+	return c.fifo.Get(key)
 }
 
 // Put an element into this cache. If this causes an element
@@ -47,34 +50,37 @@ func (c *onEvictCache[K, V]) Put(key K, value V) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	c.lru.Put(key, value) // Mark as MRU
+	c.fifo.Put(key, value) // Mark as MRU
 
-	if c.lru.Len() > c.maxSize {
-		// Note that [c.cache] has already evicted the oldest
-		// element because its max size is [c.maxSize].
-		oldestKey, oldsetVal, _ := c.lru.Oldest()
-		c.lru.Delete(oldestKey)
-		return c.onEviction(oldsetVal)
+	if c.fifo.Len() > c.maxSize {
+		oldestKey, oldestVal, _ := c.fifo.Oldest()
+		c.fifo.Delete(oldestKey)
+		return c.onEviction(oldestVal)
 	}
 	return nil
 }
 
-// Removes all elements from the cache.
+// Flush removes all elements from the cache.
 // Returns the last non-nil error during [c.onEviction], if any.
 // If [c.onEviction] errors, it will still be called for any
 // subsequent elements and the cache will still be emptied.
 func (c *onEvictCache[K, V]) Flush() error {
 	c.lock.Lock()
 	defer func() {
-		c.lru = linkedhashmap.New[K, V]()
+		c.fifo = linkedhashmap.New[K, V]()
 		c.lock.Unlock()
 	}()
 
+	// Note that we can't use [c.fifo]'s iterator because [c.onEviction]
+	// modifies [c.fifo], which violates the iterator's invariant.
 	var errs wrappers.Errs
-	iter := c.lru.NewIterator()
-	for iter.Next() {
-		val := iter.Value()
-		errs.Add(c.onEviction(val))
+	for {
+		_, node, exists := c.removeOldest()
+		if !exists {
+			// The cache is empty.
+			return errs.Err
+		}
+
+		errs.Add(c.onEviction(node))
 	}
-	return errs.Err
 }

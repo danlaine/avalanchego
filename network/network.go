@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package network
@@ -49,11 +49,6 @@ const (
 	TimeSinceLastMsgReceivedKey = "timeSinceLastMsgReceived"
 	TimeSinceLastMsgSentKey     = "timeSinceLastMsgSent"
 	SendFailRateKey             = "sendFailRate"
-
-	// lingerTimeout is the amount of time (in seconds) we allow for the
-	// remaining data in a connection to be flushed before forcibly closing the
-	// connection (TCP RST).
-	lingerTimeout = 15
 )
 
 var (
@@ -352,20 +347,28 @@ func (n *network) HealthCheck(context.Context) (interface{}, error) {
 	// Make sure we've received an incoming message within the threshold
 	now := n.peerConfig.Clock.Time()
 
-	lastMsgReceivedAt := time.Unix(atomic.LoadInt64(&n.peerConfig.LastReceived), 0)
-	timeSinceLastMsgReceived := now.Sub(lastMsgReceivedAt)
-	wasMsgReceivedRecently := timeSinceLastMsgReceived <= n.config.HealthConfig.MaxTimeSinceMsgReceived
+	lastMsgReceivedAt, msgReceived := n.getLastReceived()
+	wasMsgReceivedRecently := msgReceived
+	timeSinceLastMsgReceived := time.Duration(0)
+	if msgReceived {
+		timeSinceLastMsgReceived = now.Sub(lastMsgReceivedAt)
+		wasMsgReceivedRecently = timeSinceLastMsgReceived <= n.config.HealthConfig.MaxTimeSinceMsgReceived
+		details[TimeSinceLastMsgReceivedKey] = timeSinceLastMsgReceived.String()
+		n.metrics.timeSinceLastMsgReceived.Set(float64(timeSinceLastMsgReceived))
+	}
 	healthy = healthy && wasMsgReceivedRecently
-	details[TimeSinceLastMsgReceivedKey] = timeSinceLastMsgReceived.String()
-	n.metrics.timeSinceLastMsgReceived.Set(float64(timeSinceLastMsgReceived))
 
 	// Make sure we've sent an outgoing message within the threshold
-	lastMsgSentAt := time.Unix(atomic.LoadInt64(&n.peerConfig.LastSent), 0)
-	timeSinceLastMsgSent := now.Sub(lastMsgSentAt)
-	wasMsgSentRecently := timeSinceLastMsgSent <= n.config.HealthConfig.MaxTimeSinceMsgSent
+	lastMsgSentAt, msgSent := n.getLastSent()
+	wasMsgSentRecently := msgSent
+	timeSinceLastMsgSent := time.Duration(0)
+	if msgSent {
+		timeSinceLastMsgSent = now.Sub(lastMsgSentAt)
+		wasMsgSentRecently = timeSinceLastMsgSent <= n.config.HealthConfig.MaxTimeSinceMsgSent
+		details[TimeSinceLastMsgSentKey] = timeSinceLastMsgSent.String()
+		n.metrics.timeSinceLastMsgSent.Set(float64(timeSinceLastMsgSent))
+	}
 	healthy = healthy && wasMsgSentRecently
-	details[TimeSinceLastMsgSentKey] = timeSinceLastMsgSent.String()
-	n.metrics.timeSinceLastMsgSent.Set(float64(timeSinceLastMsgSent))
 
 	// Make sure the message send failed rate isn't too high
 	isMsgFailRate := sendFailRate <= n.config.HealthConfig.MaxSendFailRate
@@ -385,12 +388,17 @@ func (n *network) HealthCheck(context.Context) (interface{}, error) {
 	if !isConnected {
 		errorReasons = append(errorReasons, fmt.Sprintf("not connected to a minimum of %d peer(s) only %d", n.config.HealthConfig.MinConnectedPeers, connectedTo))
 	}
-	if !wasMsgReceivedRecently {
+	if !msgReceived {
+		errorReasons = append(errorReasons, "no messages received from network")
+	} else if !wasMsgReceivedRecently {
 		errorReasons = append(errorReasons, fmt.Sprintf("no messages from network received in %s > %s", timeSinceLastMsgReceived, n.config.HealthConfig.MaxTimeSinceMsgReceived))
 	}
-	if !wasMsgSentRecently {
+	if !msgSent {
+		errorReasons = append(errorReasons, "no messages sent to network")
+	} else if !wasMsgSentRecently {
 		errorReasons = append(errorReasons, fmt.Sprintf("no messages from network sent in %s > %s", timeSinceLastMsgSent, n.config.HealthConfig.MaxTimeSinceMsgSent))
 	}
+
 	if !isMsgFailRate {
 		errorReasons = append(errorReasons, fmt.Sprintf("messages failure send rate %g > %g", sendFailRate, n.config.HealthConfig.MaxSendFailRate))
 	}
@@ -675,9 +683,7 @@ func (n *network) Peers(peerID ids.NodeID) ([]ips.ClaimedIPPort, error) {
 	// We select a random sample of validators to gossip to avoid starving out a
 	// validator from being gossiped for an extended period of time.
 	s := sampler.NewUniform()
-	if err := s.Initialize(uint64(len(unknownValidators))); err != nil {
-		return nil, err
-	}
+	s.Initialize(uint64(len(unknownValidators)))
 
 	// Calculate the unknown information we need to send to this peer.
 	validatorIPs := make([]ips.ClaimedIPPort, 0, int(n.config.PeerListNumValidatorIPs))
@@ -736,18 +742,10 @@ func (n *network) Dispatch() error {
 			n.metrics.acceptFailed.Inc()
 			continue
 		}
-		n.setLinger(conn)
 
 		// Note: listener.Accept is rate limited outside of this package, so a
 		// peer can not just arbitrarily spin up goroutines here.
 		go func() {
-			// We pessimistically drop an incoming connection if the remote
-			// address is found in connectedIPs, myIPs, or peerAliasIPs. This
-			// protects our node from spending CPU cycles on TLS handshakes to
-			// upgrade connections from existing peers. Specifically, this can
-			// occur when one of our existing peers attempts to connect to one
-			// our IP aliases (that they aren't yet aware is an alias).
-			//
 			// Note: Calling [RemoteAddr] with the Proxy protocol enabled may
 			// block for up to ProxyReadHeaderTimeout. Therefore, we ensure to
 			// call this function inside the go-routine, rather than the main
@@ -1042,9 +1040,8 @@ func (n *network) authenticateIPs(ips []*ips.ClaimedIPPort) ([]*ipAuth, error) {
 // peerIPStatus assumes the caller holds [peersLock]
 func (n *network) peerIPStatus(nodeID ids.NodeID, ip *ips.ClaimedIPPort) (*ips.ClaimedIPPort, bool, bool, bool) {
 	prevIP, previouslyTracked := n.peerIPs[nodeID]
-	_, connected := n.connectedPeers.GetByID(nodeID)
 	shouldUpdateOurIP := previouslyTracked && prevIP.Timestamp < ip.Timestamp
-	shouldDial := !previouslyTracked && !connected && n.wantsConnection(nodeID)
+	shouldDial := !previouslyTracked && n.wantsConnection(nodeID)
 	return prevIP, previouslyTracked, shouldUpdateOurIP, shouldDial
 }
 
@@ -1083,6 +1080,10 @@ func (n *network) dial(ctx context.Context, nodeID ids.NodeID, ip *trackedIP) {
 			}
 
 			n.peersLock.Lock()
+			// If we no longer desire a connect to nodeID, we should cleanup
+			// trackedIPs and this goroutine. This prevents a memory leak when
+			// the tracked nodeID leaves the validator set and is never able to
+			// be connected to.
 			if !n.wantsConnection(nodeID) {
 				// Typically [n.trackedIPs[nodeID]] will already equal [ip], but
 				// the reference to [ip] is refreshed to avoid any potential
@@ -1121,6 +1122,25 @@ func (n *network) dial(ctx context.Context, nodeID ids.NodeID, ip *trackedIP) {
 				n.config.MaxReconnectDelay,
 			)
 
+			// If the network is configured to disallow private IPs and the
+			// provided IP is private, we skip all attempts to initiate a
+			// connection.
+			//
+			// Invariant: We perform this check inside of the looping goroutine
+			// because this goroutine must clean up the trackedIPs entry if
+			// nodeID leaves the validator set. This is why we continue the loop
+			// rather than returning even though we will never initiate an
+			// outbound connection with this IP.
+			if !n.config.AllowPrivateIPs && ip.ip.IP.IsPrivate() {
+				n.peerConfig.Log.Verbo("skipping connection dial",
+					zap.String("reason", "outbound connections to private IPs are prohibited"),
+					zap.Stringer("nodeID", nodeID),
+					zap.Stringer("peerIP", ip.ip.IP),
+					zap.Duration("delay", ip.delay),
+				)
+				continue
+			}
+
 			conn, err := n.dialer.Dial(ctx, ip.ip)
 			if err != nil {
 				n.peerConfig.Log.Verbo(
@@ -1130,7 +1150,6 @@ func (n *network) dial(ctx context.Context, nodeID ids.NodeID, ip *trackedIP) {
 				)
 				continue
 			}
-			n.setLinger(conn)
 
 			n.peerConfig.Log.Verbo("starting to upgrade connection",
 				zap.String("direction", "outbound"),
@@ -1149,24 +1168,6 @@ func (n *network) dial(ctx context.Context, nodeID ids.NodeID, ip *trackedIP) {
 			return
 		}
 	}()
-}
-
-// setLinger sets the linger on [conn], if it is a [*net.TCPConn], to
-// [lingerTimeout].
-func (n *network) setLinger(conn net.Conn) {
-	tcpConn, ok := conn.(*net.TCPConn)
-	if !ok {
-		return
-	}
-
-	// If a connection is closed, we allow a grace period for the unsent
-	// data in the connection to be flushed before forcibly closing the
-	// connection (TCP RST).
-	if err := tcpConn.SetLinger(lingerTimeout); err != nil {
-		n.peerConfig.Log.Warn("failed to set no linger",
-			zap.Error(err),
-		)
-	}
 }
 
 // upgrade the provided connection, which may be an inbound connection or an
@@ -1442,4 +1443,20 @@ func (n *network) gossipPeerLists() {
 	for _, p := range peers {
 		p.StartSendPeerList()
 	}
+}
+
+func (n *network) getLastReceived() (time.Time, bool) {
+	lastReceived := atomic.LoadInt64(&n.peerConfig.LastReceived)
+	if lastReceived == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(lastReceived, 0), true
+}
+
+func (n *network) getLastSent() (time.Time, bool) {
+	lastSent := atomic.LoadInt64(&n.peerConfig.LastSent)
+	if lastSent == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(lastSent, 0), true
 }

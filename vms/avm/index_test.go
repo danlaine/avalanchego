@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package avm
@@ -23,6 +23,7 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/engine/common"
+	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/avalanchego/version"
@@ -104,7 +105,7 @@ func TestIndexTransaction_Ordered(t *testing.T) {
 
 		var inputUTXOs []*avax.UTXO
 		for _, utxoID := range uniqueParsedTX.InputUTXOs() {
-			utxo, err := vm.getUTXO(utxoID)
+			utxo, err := vm.dagState.GetUTXOFromID(utxoID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -113,8 +114,7 @@ func TestIndexTransaction_Ordered(t *testing.T) {
 		}
 
 		// index the transaction
-		err := vm.addressTxsIndexer.Accept(uniqueParsedTX.ID(), inputUTXOs, uniqueParsedTX.UTXOs())
-		require.NoError(t, err)
+		require.NoError(t, vm.addressTxsIndexer.Accept(uniqueParsedTX.ID(), inputUTXOs, uniqueParsedTX.UTXOs()))
 	}
 
 	// ensure length is 5
@@ -194,7 +194,7 @@ func TestIndexTransaction_MultipleTransactions(t *testing.T) {
 
 		var inputUTXOs []*avax.UTXO
 		for _, utxoID := range uniqueParsedTX.InputUTXOs() {
-			utxo, err := vm.getUTXO(utxoID)
+			utxo, err := vm.dagState.GetUTXOFromID(utxoID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -203,8 +203,7 @@ func TestIndexTransaction_MultipleTransactions(t *testing.T) {
 		}
 
 		// index the transaction
-		err := vm.addressTxsIndexer.Accept(uniqueParsedTX.ID(), inputUTXOs, uniqueParsedTX.UTXOs())
-		require.NoError(t, err)
+		require.NoError(t, vm.addressTxsIndexer.Accept(uniqueParsedTX.ID(), inputUTXOs, uniqueParsedTX.UTXOs()))
 	}
 
 	// ensure length is same as keys length
@@ -264,7 +263,7 @@ func TestIndexTransaction_MultipleAddresses(t *testing.T) {
 
 	var inputUTXOs []*avax.UTXO //nolint:prealloc
 	for _, utxoID := range tx.Unsigned.InputUTXOs() {
-		utxo, err := vm.getUTXO(utxoID)
+		utxo, err := vm.dagState.GetUTXOFromID(utxoID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -273,9 +272,7 @@ func TestIndexTransaction_MultipleAddresses(t *testing.T) {
 	}
 
 	// index the transaction
-	err := vm.addressTxsIndexer.Accept(tx.ID(), inputUTXOs, tx.UTXOs())
-	require.NoError(t, err)
-	require.NoError(t, err)
+	require.NoError(t, vm.addressTxsIndexer.Accept(tx.ID(), inputUTXOs, tx.UTXOs()))
 
 	assertIndexedTX(t, vm.db, uint64(0), addr, txAssetID.ID, tx.ID())
 	assertLatestIdx(t, vm.db, addr, txAssetID.ID, 1)
@@ -347,7 +344,7 @@ func TestIndexTransaction_UnorderedWrites(t *testing.T) {
 
 		var inputUTXOs []*avax.UTXO
 		for _, utxoID := range uniqueParsedTX.InputUTXOs() {
-			utxo, err := vm.getUTXO(utxoID)
+			utxo, err := vm.dagState.GetUTXOFromID(utxoID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -356,8 +353,7 @@ func TestIndexTransaction_UnorderedWrites(t *testing.T) {
 		}
 
 		// index the transaction, NOT calling Accept(ids.ID) method
-		err := vm.addressTxsIndexer.Accept(uniqueParsedTX.ID(), inputUTXOs, uniqueParsedTX.UTXOs())
-		require.NoError(t, err)
+		require.NoError(t, vm.addressTxsIndexer.Accept(uniqueParsedTX.ID(), inputUTXOs, uniqueParsedTX.UTXOs()))
 	}
 
 	// ensure length is same as keys length
@@ -414,7 +410,7 @@ func TestIndexingNewInitWithIndexingEnabled(t *testing.T) {
 
 	// now disable indexing with allow-incomplete set to false
 	_, err = index.NewNoIndexer(db, false)
-	require.Error(t, err)
+	require.ErrorIs(t, err, index.ErrCausesIncompleteIndex)
 
 	// now disable indexing with allow-incomplete set to true
 	_, err = index.NewNoIndexer(db, true)
@@ -431,7 +427,7 @@ func TestIndexingNewInitWithIndexingDisabled(t *testing.T) {
 
 	// It's not OK to have an incomplete index when allowIncompleteIndices is false
 	_, err = index.NewIndexer(db, ctx.Log, "", prometheus.NewRegistry(), false)
-	require.Error(t, err)
+	require.ErrorIs(t, err, index.ErrIndexingRequiredFromGenesis)
 
 	// It's OK to have an incomplete index when allowIncompleteIndices is true
 	_, err = index.NewIndexer(db, ctx.Log, "", prometheus.NewRegistry(), true)
@@ -456,12 +452,12 @@ func TestIndexingAllowIncomplete(t *testing.T) {
 	_, err := index.NewNoIndexer(db, false)
 	require.NoError(t, err)
 
-	// we initialise with indexing enabled now and allow incomplete indexing as false
+	// we initialize with indexing enabled now and allow incomplete indexing as false
 	_, err = index.NewIndexer(db, ctx.Log, "", prometheus.NewRegistry(), false)
 	// we should get error because:
 	// - indexing was disabled previously
 	// - node now is asked to enable indexing with allow incomplete set to false
-	require.Error(t, err)
+	require.ErrorIs(t, err, index.ErrIndexingRequiredFromGenesis)
 }
 
 func buildPlatformUTXO(utxoID avax.UTXOID, txAssetID avax.Asset, addr ids.ShortID) *avax.UTXO {
@@ -485,7 +481,7 @@ func signTX(codec codec.Manager, tx *txs.Tx, key *secp256k1.PrivateKey) error {
 func buildTX(utxoID avax.UTXOID, txAssetID avax.Asset, address ...ids.ShortID) *txs.Tx {
 	return &txs.Tx{Unsigned: &txs.BaseTx{
 		BaseTx: avax.BaseTx{
-			NetworkID:    networkID,
+			NetworkID:    constants.UnitTestID,
 			BlockchainID: chainID,
 			Ins: []*avax.TransferableInput{{
 				UTXOID: utxoID,
@@ -546,6 +542,8 @@ func setupTestVM(t *testing.T, ctx *snow.Context, baseDBManager manager.Manager,
 }
 
 func assertLatestIdx(t *testing.T, db database.Database, sourceAddress ids.ShortID, assetID ids.ID, expectedIdx uint64) {
+	require := require.New(t)
+
 	addressDB := prefixdb.New(sourceAddress[:], db)
 	assetDB := prefixdb.New(assetID[:], addressDB)
 
@@ -553,9 +551,9 @@ func assertLatestIdx(t *testing.T, db database.Database, sourceAddress ids.Short
 	binary.BigEndian.PutUint64(expectedIdxBytes, expectedIdx)
 
 	idxBytes, err := assetDB.Get([]byte("idx"))
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.EqualValues(t, expectedIdxBytes, idxBytes)
+	require.Equal(expectedIdxBytes, idxBytes)
 }
 
 func checkIndexedTX(db database.Database, index uint64, sourceAddress ids.ShortID, assetID ids.ID, transactionID ids.ID) error {
@@ -605,17 +603,14 @@ func setupTestTxsInDB(t *testing.T, db *versiondb.Database, address ids.ShortID,
 	binary.BigEndian.PutUint64(idxBytes, idx)
 	for _, txID := range testTxs {
 		txID := txID
-		err := assetPrefixDB.Put(idxBytes, txID[:])
-		require.NoError(t, err)
+		require.NoError(t, assetPrefixDB.Put(idxBytes, txID[:]))
 		idx++
 		binary.BigEndian.PutUint64(idxBytes, idx)
 	}
 	_, err := db.CommitBatch()
 	require.NoError(t, err)
 
-	err = assetPrefixDB.Put([]byte("idx"), idxBytes)
-	require.NoError(t, err)
-	err = db.Commit()
-	require.NoError(t, err)
+	require.NoError(t, assetPrefixDB.Put([]byte("idx"), idxBytes))
+	require.NoError(t, db.Commit())
 	return testTxs
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package gsharedmemory
@@ -37,11 +37,8 @@ func TestInterface(t *testing.T) {
 
 		test(t, chainID0, chainID1, sm0, sm1, testDB)
 
-		err := conn0.Close()
-		require.NoError(err)
-
-		err = conn1.Close()
-		require.NoError(err)
+		require.NoError(conn0.Close())
+		require.NoError(conn1.Close())
 	}
 }
 

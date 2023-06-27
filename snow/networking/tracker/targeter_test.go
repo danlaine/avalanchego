@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package tracker
@@ -33,8 +33,8 @@ func TestNewTargeter(t *testing.T) {
 		vdrs,
 		tracker,
 	)
-	targeter, ok := targeterIntf.(*targeter)
-	require.True(ok)
+	require.IsType(&targeter{}, targeterIntf)
+	targeter := targeterIntf.(*targeter)
 	require.Equal(vdrs, targeter.vdrs)
 	require.Equal(tracker, targeter.tracker)
 	require.Equal(config.MaxNonVdrUsage, targeter.maxNonVdrUsage)

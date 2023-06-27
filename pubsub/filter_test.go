@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package pubsub
@@ -31,8 +31,7 @@ func TestAddAddressesParseAddresses(t *testing.T) {
 		},
 	}}
 
-	err = msg.parseAddresses()
-	require.NoError(err)
+	require.NoError(msg.parseAddresses())
 
 	require.Len(msg.addressIds, 1)
 	require.Equal(addrID[:], msg.addressIds[0])

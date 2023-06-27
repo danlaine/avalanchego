@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
@@ -35,7 +35,6 @@ import (
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/timer/mockable"
 	"github.com/ava-labs/avalanchego/utils/units"
-	"github.com/ava-labs/avalanchego/utils/window"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/avalanchego/version"
 	"github.com/ava-labs/avalanchego/vms/components/avax"
@@ -54,16 +53,14 @@ import (
 
 	db_manager "github.com/ava-labs/avalanchego/database/manager"
 	p_tx_builder "github.com/ava-labs/avalanchego/vms/platformvm/txs/builder"
+	pvalidators "github.com/ava-labs/avalanchego/vms/platformvm/validators"
 )
 
 const (
 	pending stakerStatus = iota
 	current
 
-	testNetworkID                 = 10 // To be used in tests
-	defaultWeight                 = 10000
-	maxRecentlyAcceptedWindowSize = 256
-	recentlyAcceptedWindowTTL     = 5 * time.Minute
+	defaultWeight = 10000
 )
 
 var (
@@ -190,13 +187,6 @@ func newEnvironment(t *testing.T, ctrl *gomock.Controller) *environment {
 	}
 
 	registerer := prometheus.NewRegistry()
-	window := window.New[ids.ID](
-		window.Config{
-			Clock:   res.clk,
-			MaxSize: maxRecentlyAcceptedWindowSize,
-			TTL:     recentlyAcceptedWindowTTL,
-		},
-	)
 	res.sender = &common.SenderTest{T: t}
 
 	metrics := metrics.Noop
@@ -213,7 +203,7 @@ func newEnvironment(t *testing.T, ctrl *gomock.Controller) *environment {
 			metrics,
 			res.state,
 			res.backend,
-			window,
+			pvalidators.TestManager,
 		)
 		addSubnet(res)
 	} else {
@@ -222,7 +212,7 @@ func newEnvironment(t *testing.T, ctrl *gomock.Controller) *environment {
 			metrics,
 			res.mockedState,
 			res.backend,
-			window,
+			pvalidators.TestManager,
 		)
 		// we do not add any subnet to state, since we can mock
 		// whatever we need
@@ -266,7 +256,9 @@ func addSubnet(env *environment) {
 	}
 
 	stateDiff.AddTx(testSubnet1, status.Committed)
-	stateDiff.Apply(env.state)
+	if err := stateDiff.Apply(env.state); err != nil {
+		panic(err)
+	}
 }
 
 func defaultState(
@@ -284,6 +276,7 @@ func defaultState(
 		ctx,
 		metrics.Noop,
 		rewards,
+		&utils.Atomic[bool]{},
 	)
 	if err != nil {
 		panic(err)
@@ -291,10 +284,6 @@ func defaultState(
 
 	// persist and reload to init a bunch of in-memory stuff
 	state.SetHeight(0)
-	if err := state.Commit(); err != nil {
-		panic(err)
-	}
-	state.SetHeight( /*height*/ 0)
 	if err := state.Commit(); err != nil {
 		panic(err)
 	}
@@ -360,9 +349,9 @@ func defaultConfig() *config.Config {
 }
 
 func defaultClock() *mockable.Clock {
-	clk := mockable.Clock{}
+	clk := &mockable.Clock{}
 	clk.Set(defaultGenesisTime)
-	return &clk
+	return clk
 }
 
 type fxVMInt struct {
@@ -403,10 +392,9 @@ func defaultFx(clk *mockable.Clock, log logging.Logger, isBootstrapped bool) fx.
 
 func buildGenesisTest(ctx *snow.Context) []byte {
 	genesisUTXOs := make([]api.UTXO, len(preFundedKeys))
-	hrp := constants.NetworkIDToHRP[testNetworkID]
 	for i, key := range preFundedKeys {
 		id := key.PublicKey().Address()
-		addr, err := address.FormatBech32(hrp, id.Bytes())
+		addr, err := address.FormatBech32(constants.UnitTestHRP, id.Bytes())
 		if err != nil {
 			panic(err)
 		}
@@ -419,7 +407,7 @@ func buildGenesisTest(ctx *snow.Context) []byte {
 	genesisValidators := make([]api.PermissionlessValidator, len(preFundedKeys))
 	for i, key := range preFundedKeys {
 		nodeID := ids.NodeID(key.PublicKey().Address())
-		addr, err := address.FormatBech32(hrp, nodeID.Bytes())
+		addr, err := address.FormatBech32(constants.UnitTestHRP, nodeID.Bytes())
 		if err != nil {
 			panic(err)
 		}
@@ -442,7 +430,7 @@ func buildGenesisTest(ctx *snow.Context) []byte {
 	}
 
 	buildGenesisArgs := api.BuildGenesisArgs{
-		NetworkID:     json.Uint32(testNetworkID),
+		NetworkID:     json.Uint32(constants.UnitTestID),
 		AvaxAssetID:   ctx.AVAXAssetID,
 		UTXOs:         genesisUTXOs,
 		Validators:    genesisValidators,

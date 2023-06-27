@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package config
@@ -10,8 +10,10 @@ const (
 	ConfigContentKey                                   = "config-file-content"
 	ConfigContentTypeKey                               = "config-file-content-type"
 	VersionKey                                         = "version"
-	GenesisConfigFileKey                               = "genesis"
-	GenesisConfigContentKey                            = "genesis-content"
+	GenesisConfigFileKey                               = "genesis"         // TODO: deprecated, remove
+	GenesisConfigContentKey                            = "genesis-content" // TODO: deprecated, remove this
+	GenesisFileKey                                     = "genesis-file"
+	GenesisFileContentKey                              = "genesis-file-content"
 	NetworkNameKey                                     = "network-id"
 	TxFeeKey                                           = "tx-fee"
 	CreateAssetTxFeeKey                                = "create-asset-tx-fee"
@@ -40,10 +42,10 @@ const (
 	PublicIPKey                                        = "public-ip"
 	PublicIPResolutionFreqKey                          = "public-ip-resolution-frequency"
 	PublicIPResolutionServiceKey                       = "public-ip-resolution-service"
-	InboundConnUpgradeThrottlerCooldownKey             = "inbound-connection-throttling-cooldown"
-	InboundThrottlerMaxConnsPerSecKey                  = "inbound-connection-throttling-max-conns-per-sec"
-	OutboundConnectionThrottlingRpsKey                 = "outbound-connection-throttling-rps"
-	OutboundConnectionTimeoutKey                       = "outbound-connection-timeout"
+	InboundConnUpgradeThrottlerCooldownKey             = "inbound-connection-throttling-cooldown"          // TODO: deprecated, remove this
+	InboundThrottlerMaxConnsPerSecKey                  = "inbound-connection-throttling-max-conns-per-sec" // TODO: deprecated, remove this
+	OutboundConnectionThrottlingRpsKey                 = "outbound-connection-throttling-rps"              // TODO: deprecated, remove this
+	OutboundConnectionTimeoutKey                       = "outbound-connection-timeout"                     // TODO: deprecated, remove this
 	HTTPHostKey                                        = "http-host"
 	HTTPPortKey                                        = "http-port"
 	HTTPSEnabledKey                                    = "http-tls-enabled"
@@ -52,8 +54,13 @@ const (
 	HTTPSCertFileKey                                   = "http-tls-cert-file"
 	HTTPSCertContentKey                                = "http-tls-cert-file-content"
 	HTTPAllowedOrigins                                 = "http-allowed-origins"
+	HTTPAllowedHostsKey                                = "http-allowed-hosts"
 	HTTPShutdownTimeoutKey                             = "http-shutdown-timeout"
 	HTTPShutdownWaitKey                                = "http-shutdown-wait"
+	HTTPReadTimeoutKey                                 = "http-read-timeout"
+	HTTPReadHeaderTimeoutKey                           = "http-read-header-timeout"
+	HTTPWriteTimeoutKey                                = "http-write-timeout"
+	HTTPIdleTimeoutKey                                 = "http-idle-timeout"
 	APIAuthRequiredKey                                 = "api-auth-required"
 	APIAuthPasswordKey                                 = "api-auth-password"
 	APIAuthPasswordFileKey                             = "api-auth-password-file"
@@ -62,7 +69,7 @@ const (
 	BootstrapIPsKey                                    = "bootstrap-ips"
 	BootstrapIDsKey                                    = "bootstrap-ids"
 	StakingPortKey                                     = "staking-port"
-	StakingEnabledKey                                  = "staking-enabled"
+	StakingEnabledKey                                  = "staking-enabled" // TODO: deprecated, remove this
 	StakingEphemeralCertEnabledKey                     = "staking-ephemeral-cert-enabled"
 	StakingTLSKeyPathKey                               = "staking-tls-key-file"
 	StakingTLSKeyContentKey                            = "staking-tls-key-file-content"
@@ -71,7 +78,9 @@ const (
 	StakingEphemeralSignerEnabledKey                   = "staking-ephemeral-signer-enabled"
 	StakingSignerKeyPathKey                            = "staking-signer-key-file"
 	StakingSignerKeyContentKey                         = "staking-signer-key-file-content"
-	StakingDisabledWeightKey                           = "staking-disabled-weight"
+	StakingDisabledWeightKey                           = "staking-disabled-weight" // TODO: deprecated, remove this
+	SybilProtectionEnabledKey                          = "sybil-protection-enabled"
+	SybilProtectionDisabledWeightKey                   = "sybil-protection-disabled-weight"
 	NetworkInitialTimeoutKey                           = "network-initial-timeout"
 	NetworkMinimumTimeoutKey                           = "network-minimum-timeout"
 	NetworkMaximumTimeoutKey                           = "network-maximum-timeout"
@@ -94,7 +103,8 @@ const (
 	NetworkPingTimeoutKey                              = "network-ping-timeout"
 	NetworkPingFrequencyKey                            = "network-ping-frequency"
 	NetworkMaxReconnectDelayKey                        = "network-max-reconnect-delay"
-	NetworkCompressionEnabledKey                       = "network-compression-enabled"
+	NetworkCompressionEnabledKey                       = "network-compression-enabled" // TODO this is deprecated. Eventually remove it and constants.DefaultNetworkCompressionEnabled
+	NetworkCompressionTypeKey                          = "network-compression-type"
 	NetworkMaxClockDifferenceKey                       = "network-max-clock-difference"
 	NetworkAllowPrivateIPsKey                          = "network-allow-private-ips"
 	NetworkRequireValidatorToConnectKey                = "network-require-validator-to-connect"
@@ -103,6 +113,10 @@ const (
 	NetworkTCPProxyEnabledKey                          = "network-tcp-proxy-enabled"
 	NetworkTCPProxyReadTimeoutKey                      = "network-tcp-proxy-read-timeout"
 	NetworkTLSKeyLogFileKey                            = "network-tls-key-log-file-unsafe"
+	NetworkInboundConnUpgradeThrottlerCooldownKey      = "network-inbound-connection-throttling-cooldown"
+	NetworkInboundThrottlerMaxConnsPerSecKey           = "network-inbound-connection-throttling-max-conns-per-sec"
+	NetworkOutboundConnectionThrottlingRpsKey          = "network-outbound-connection-throttling-rps"
+	NetworkOutboundConnectionTimeoutKey                = "network-outbound-connection-timeout"
 	BenchlistFailThresholdKey                          = "benchlist-fail-threshold"
 	BenchlistDurationKey                               = "benchlist-duration"
 	BenchlistMinFailingDurationKey                     = "benchlist-min-failing-duration"
@@ -119,14 +133,10 @@ const (
 	SnowQuorumSizeKey                                  = "snow-quorum-size"
 	SnowVirtuousCommitThresholdKey                     = "snow-virtuous-commit-threshold"
 	SnowRogueCommitThresholdKey                        = "snow-rogue-commit-threshold"
-	SnowAvalancheNumParentsKey                         = "snow-avalanche-num-parents"
-	SnowAvalancheBatchSizeKey                          = "snow-avalanche-batch-size"
 	SnowConcurrentRepollsKey                           = "snow-concurrent-repolls"
 	SnowOptimalProcessingKey                           = "snow-optimal-processing"
 	SnowMaxProcessingKey                               = "snow-max-processing"
 	SnowMaxTimeProcessingKey                           = "snow-max-time-processing"
-	SnowMixedQueryNumPushVdrKey                        = "snow-mixed-query-num-push-vdr"
-	SnowMixedQueryNumPushNonVdrKey                     = "snow-mixed-query-num-push-non-vdr"
 	TrackSubnetsKey                                    = "track-subnets"
 	AdminAPIEnabledKey                                 = "api-admin-enabled"
 	InfoAPIEnabledKey                                  = "api-info-enabled"
@@ -137,7 +147,9 @@ const (
 	IpcsChainIDsKey                                    = "ipcs-chain-ids"
 	IpcsPathKey                                        = "ipcs-path"
 	MeterVMsEnabledKey                                 = "meter-vms-enabled"
-	ConsensusGossipFrequencyKey                        = "consensus-gossip-frequency"
+	ConsensusGossipFrequencyKey                        = "consensus-gossip-frequency" // TODO: deprecated, remove this
+	ConsensusAcceptedFrontierGossipFrequencyKey        = "consensus-accepted-frontier-gossip-frequency"
+	ConsensusAppConcurrencyKey                         = "consensus-app-concurrency"
 	ConsensusGossipAcceptedFrontierValidatorSizeKey    = "consensus-accepted-frontier-gossip-validator-size"
 	ConsensusGossipAcceptedFrontierNonValidatorSizeKey = "consensus-accepted-frontier-gossip-non-validator-size"
 	ConsensusGossipAcceptedFrontierPeerSizeKey         = "consensus-accepted-frontier-gossip-peer-size"

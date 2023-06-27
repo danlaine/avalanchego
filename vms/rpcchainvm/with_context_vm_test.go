@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package rpcchainvm
@@ -102,8 +102,7 @@ func TestContextVMSummary(t *testing.T) {
 	ctx := snow.DefaultContextTest()
 	dbManager := manager.NewMemDB(version.Semantic1_0_0)
 
-	err := vm.Initialize(context.Background(), ctx, dbManager, nil, nil, nil, nil, nil, nil)
-	require.NoError(err)
+	require.NoError(vm.Initialize(context.Background(), ctx, dbManager, nil, nil, nil, nil, nil, nil))
 
 	blkIntf, err := vm.BuildBlockWithContext(context.Background(), blockContext)
 	require.NoError(err)
@@ -115,6 +114,5 @@ func TestContextVMSummary(t *testing.T) {
 	require.NoError(err)
 	require.True(shouldVerify)
 
-	err = blk.VerifyWithContext(context.Background(), blockContext)
-	require.NoError(err)
+	require.NoError(blk.VerifyWithContext(context.Background(), blockContext))
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package builder
@@ -29,7 +29,7 @@ const MaxPageSize = 1024
 var (
 	_ Builder = (*builder)(nil)
 
-	errNoFunds = errors.New("no spendable funds were found")
+	ErrNoFunds = errors.New("no spendable funds were found")
 )
 
 type Builder interface {
@@ -241,7 +241,7 @@ func (b *builder) NewImportTx(
 	avax.SortTransferableInputsWithSigners(importedInputs, signers)
 
 	if len(importedAmounts) == 0 {
-		return nil, errNoFunds // No imported UTXOs were spendable
+		return nil, ErrNoFunds // No imported UTXOs were spendable
 	}
 
 	importedAVAX := importedAmounts[b.ctx.AVAXAssetID]

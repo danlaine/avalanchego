@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package getter
@@ -74,7 +74,11 @@ func (gh *getter) GetAcceptedStateSummary(_ context.Context, nodeID ids.NodeID, 
 
 func (gh *getter) GetAcceptedFrontier(ctx context.Context, validatorID ids.NodeID, requestID uint32) error {
 	acceptedFrontier := gh.storage.Edge(ctx)
-	gh.sender.SendAcceptedFrontier(ctx, validatorID, requestID, acceptedFrontier)
+	// Since all the DAGs are linearized, we only need to return the stop
+	// vertex.
+	if len(acceptedFrontier) > 0 {
+		gh.sender.SendAcceptedFrontier(ctx, validatorID, requestID, acceptedFrontier[0])
+	}
 	return nil
 }
 

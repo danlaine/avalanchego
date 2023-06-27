@@ -1,10 +1,11 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"sync"
@@ -19,7 +20,11 @@ import (
 	"github.com/ava-labs/avalanchego/vms"
 )
 
-var _ VMRegisterer = (*vmRegisterer)(nil)
+var (
+	_ VMRegisterer = (*vmRegisterer)(nil)
+
+	errNotVM = errors.New("not a VM")
+)
 
 // VMRegisterer defines functionality to install a virtual machine.
 type VMRegisterer interface {
@@ -97,7 +102,7 @@ func (r *vmRegisterer) createStaticHandlers(
 
 	commonVM, ok := vm.(common.VM)
 	if !ok {
-		return nil, fmt.Errorf("%s doesn't implement VM", vmID)
+		return nil, fmt.Errorf("%s is %w", vmID, errNotVM)
 	}
 
 	handlers, err := commonVM.CreateStaticHandlers(ctx)

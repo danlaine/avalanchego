@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package merkledb
@@ -14,6 +14,8 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/trace"
 	"github.com/ava-labs/avalanchego/utils/hashing"
+
+	pb "github.com/ava-labs/avalanchego/proto/pb/sync"
 )
 
 const verificationCacheSize = 2_000
@@ -34,6 +36,16 @@ var (
 	ErrProofNodeNotForKey          = errors.New("the provided node has a key that is not a prefix of the specified key")
 	ErrProofValueDoesntMatch       = errors.New("the provided value does not match the proof node for the provided key's value")
 	ErrProofNodeHasUnincludedValue = errors.New("the provided proof has a value for a key within the range that is not present in the provided key/values")
+	ErrInvalidMaybe                = errors.New("maybe is nothing but has value")
+	ErrInvalidChildIndex           = fmt.Errorf("child index must be less than %d", NodeBranchFactor)
+	ErrNilProofNode                = errors.New("proof node is nil")
+	ErrNilValueOrHash              = errors.New("proof node's valueOrHash field is nil")
+	ErrNilSerializedPath           = errors.New("serialized path is nil")
+	ErrNilRangeProof               = errors.New("range proof is nil")
+	ErrNilChangeProof              = errors.New("change proof is nil")
+	ErrNilMaybeBytes               = errors.New("maybe bytes is nil")
+	ErrNilProof                    = errors.New("proof is nil")
+	ErrNilValue                    = errors.New("value is nil")
 )
 
 type ProofNode struct {
@@ -43,6 +55,68 @@ type ProofNode struct {
 	// The hash of the value in this node otherwise.
 	ValueOrHash Maybe[[]byte]
 	Children    map[byte]ids.ID
+}
+
+// Assumes [node.Key.KeyPath.NibbleLength] <= math.MaxUint64.
+func (node *ProofNode) ToProto() *pb.ProofNode {
+	pbNode := &pb.ProofNode{
+		Key: &pb.SerializedPath{
+			NibbleLength: uint64(node.KeyPath.NibbleLength),
+			Value:        node.KeyPath.Value,
+		},
+		Children: make(map[uint32][]byte, len(node.Children)),
+	}
+
+	for childIndex, childID := range node.Children {
+		childID := childID
+		pbNode.Children[uint32(childIndex)] = childID[:]
+	}
+
+	if node.ValueOrHash.hasValue {
+		pbNode.ValueOrHash = &pb.MaybeBytes{
+			Value: node.ValueOrHash.value,
+		}
+	} else {
+		pbNode.ValueOrHash = &pb.MaybeBytes{
+			IsNothing: true,
+		}
+	}
+
+	return pbNode
+}
+
+func (node *ProofNode) UnmarshalProto(pbNode *pb.ProofNode) error {
+	switch {
+	case pbNode == nil:
+		return ErrNilProofNode
+	case pbNode.ValueOrHash == nil:
+		return ErrNilValueOrHash
+	case pbNode.ValueOrHash.IsNothing && len(pbNode.ValueOrHash.Value) != 0:
+		return ErrInvalidMaybe
+	case pbNode.Key == nil:
+		return ErrNilSerializedPath
+	}
+
+	node.KeyPath.NibbleLength = int(pbNode.Key.NibbleLength)
+	node.KeyPath.Value = pbNode.Key.Value
+
+	node.Children = make(map[byte]ids.ID, len(pbNode.Children))
+	for childIndex, childIDBytes := range pbNode.Children {
+		if childIndex >= NodeBranchFactor {
+			return ErrInvalidChildIndex
+		}
+		childID, err := ids.ToID(childIDBytes)
+		if err != nil {
+			return err
+		}
+		node.Children[byte(childIndex)] = childID
+	}
+
+	if !pbNode.ValueOrHash.IsNothing {
+		node.ValueOrHash = Some(pbNode.ValueOrHash.Value)
+	}
+
+	return nil
 }
 
 // An inclusion/exclustion proof of a key.
@@ -104,7 +178,7 @@ func (proof *Proof) Verify(ctx context.Context, expectedRootID ids.ID) error {
 	provenPath := proof.Path[len(proof.Path)-1].KeyPath.deserialize()
 
 	// Don't bother locking [db] and [view] -- nobody else has a reference to them.
-	if err = addPathInfo(ctx, view, proof.Path, provenPath, provenPath); err != nil {
+	if err = addPathInfo(view, proof.Path, provenPath, provenPath); err != nil {
 		return err
 	}
 
@@ -115,6 +189,53 @@ func (proof *Proof) Verify(ctx context.Context, expectedRootID ids.ID) error {
 	if expectedRootID != gotRootID {
 		return fmt.Errorf("%w:[%s], expected:[%s]", ErrInvalidProof, gotRootID, expectedRootID)
 	}
+	return nil
+}
+
+func (proof *Proof) ToProto() *pb.Proof {
+	value := &pb.MaybeBytes{}
+	if !proof.Value.IsNothing() {
+		value.Value = proof.Value.Value()
+	} else {
+		value.IsNothing = true
+	}
+
+	pbProof := &pb.Proof{
+		Key:   proof.Key,
+		Value: value,
+	}
+
+	pbProof.Proof = make([]*pb.ProofNode, len(proof.Path))
+	for i, node := range proof.Path {
+		pbProof.Proof[i] = node.ToProto()
+	}
+
+	return pbProof
+}
+
+func (proof *Proof) UnmarshalProto(pbProof *pb.Proof) error {
+	switch {
+	case pbProof == nil:
+		return ErrNilProof
+	case pbProof.Value == nil:
+		return ErrNilValue
+	case pbProof.Value.IsNothing && len(pbProof.Value.Value) != 0:
+		return ErrInvalidMaybe
+	}
+
+	proof.Key = pbProof.Key
+
+	if !pbProof.Value.IsNothing {
+		proof.Value = Some(pbProof.Value.Value)
+	}
+
+	proof.Path = make([]ProofNode, len(pbProof.Proof))
+	for i, pbNode := range pbProof.Proof {
+		if err := proof.Path[i].UnmarshalProto(pbNode); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -222,7 +343,7 @@ func (proof *RangeProof) Verify(
 
 	// Insert all key-value pairs into the trie.
 	for _, kv := range proof.KeyValues {
-		if _, err := view.insertIntoTrie(ctx, newPath(kv.Key), Some(kv.Value)); err != nil {
+		if _, err := view.insertIntoTrie(newPath(kv.Key), Some(kv.Value)); err != nil {
 			return err
 		}
 	}
@@ -232,10 +353,10 @@ func (proof *RangeProof) Verify(
 	// By inserting all children < [start], we prove that there are no keys
 	// > [start] but less than the first key given. That is, the peer who
 	// gave us this proof is not omitting nodes.
-	if err := addPathInfo(ctx, view, proof.StartProof, smallestPath, largestPath); err != nil {
+	if err := addPathInfo(view, proof.StartProof, smallestPath, largestPath); err != nil {
 		return err
 	}
-	if err := addPathInfo(ctx, view, proof.EndProof, smallestPath, largestPath); err != nil {
+	if err := addPathInfo(view, proof.EndProof, smallestPath, largestPath); err != nil {
 		return err
 	}
 
@@ -246,6 +367,62 @@ func (proof *RangeProof) Verify(
 	if expectedRootID != calculatedRoot {
 		return fmt.Errorf("%w:[%s], expected:[%s]", ErrInvalidProof, calculatedRoot, expectedRootID)
 	}
+	return nil
+}
+
+func (proof *RangeProof) ToProto() *pb.RangeProof {
+	startProof := make([]*pb.ProofNode, len(proof.StartProof))
+	for i, node := range proof.StartProof {
+		startProof[i] = node.ToProto()
+	}
+
+	endProof := make([]*pb.ProofNode, len(proof.EndProof))
+	for i, node := range proof.EndProof {
+		endProof[i] = node.ToProto()
+	}
+
+	keyValues := make([]*pb.KeyValue, len(proof.KeyValues))
+	for i, kv := range proof.KeyValues {
+		keyValues[i] = &pb.KeyValue{
+			Key:   kv.Key,
+			Value: kv.Value,
+		}
+	}
+
+	return &pb.RangeProof{
+		Start:     startProof,
+		End:       endProof,
+		KeyValues: keyValues,
+	}
+}
+
+func (proof *RangeProof) UnmarshalProto(pbProof *pb.RangeProof) error {
+	if pbProof == nil {
+		return ErrNilRangeProof
+	}
+
+	proof.StartProof = make([]ProofNode, len(pbProof.Start))
+	for i, protoNode := range pbProof.Start {
+		if err := proof.StartProof[i].UnmarshalProto(protoNode); err != nil {
+			return err
+		}
+	}
+
+	proof.EndProof = make([]ProofNode, len(pbProof.End))
+	for i, protoNode := range pbProof.End {
+		if err := proof.EndProof[i].UnmarshalProto(protoNode); err != nil {
+			return err
+		}
+	}
+
+	proof.KeyValues = make([]KeyValue, len(pbProof.KeyValues))
+	for i, kv := range pbProof.KeyValues {
+		proof.KeyValues[i] = KeyValue{
+			Key:   kv.Key,
+			Value: kv.Value,
+		}
+	}
+
 	return nil
 }
 
@@ -276,6 +453,11 @@ func verifyAllRangeProofKeyValuesPresent(proof []ProofNode, start, end path, key
 	return nil
 }
 
+type KeyChange struct {
+	Key   []byte
+	Value Maybe[[]byte]
+}
+
 type ChangeProof struct {
 	// If false, the node that created this doesn't have
 	// sufficient history to generate a change proof and
@@ -293,176 +475,91 @@ type ChangeProof struct {
 	// Empty iff no upper bound on the requested range was given
 	// and [KeyValues] and [DeletedKeys] are empty.
 	EndProof []ProofNode
-	// A subset of key-values that were added or had their values modified
+	// A subset of key-values that were added, removed, or had their values modified
 	// between the requested start root (exclusive) and the requested
 	// end root (inclusive).
 	// Sorted by increasing key.
-	KeyValues []KeyValue
-	// A subset of keys that were removed from the trie between the requested
-	// start root (exclusive) and the requested end root (inclusive).
-	// Sorted by increasing key.
-	DeletedKeys [][]byte
+	KeyChanges []KeyChange
 }
 
-// Returns nil iff all of the following hold:
-//   - [start] <= [end].
-//   - [proof] is non-empty iff [proof.HadRootsInHistory].
-//   - All keys in [proof.KeyValues] and [proof.DeletedKeys] are in [start, end].
-//     If [start] is empty, all keys are considered > [start].
-//     If [end] is empty, all keys are considered < [end].
-//   - [proof.KeyValues] and [proof.DeletedKeys] are sorted in order of increasing key.
-//   - [proof.StartProof] and [proof.EndProof] are well-formed.
-//   - When the keys in [proof.KeyValues] are added to [db] and the keys in [proof.DeletedKeys]
-//     are removed from [db], the root ID of [db] is [expectedEndRootID].
-//
-// Assumes [db.lock] isn't held.
-func (proof *ChangeProof) Verify(
-	ctx context.Context,
-	db *Database,
-	start []byte,
-	end []byte,
-	expectedEndRootID ids.ID,
-) error {
-	if len(end) > 0 && bytes.Compare(start, end) > 0 {
-		return ErrStartAfterEnd
+func (proof *ChangeProof) ToProto() *pb.ChangeProof {
+	startProof := make([]*pb.ProofNode, len(proof.StartProof))
+	for i, node := range proof.StartProof {
+		startProof[i] = node.ToProto()
 	}
 
-	if !proof.HadRootsInHistory {
-		// The node we requested the proof from didn't have sufficient
-		// history to fulfill this request.
-		if !proof.Empty() {
-			// cannot have any changes if the root was missing
-			return ErrDataInMissingRootProof
+	endProof := make([]*pb.ProofNode, len(proof.EndProof))
+	for i, node := range proof.EndProof {
+		endProof[i] = node.ToProto()
+	}
+
+	keyChanges := make([]*pb.KeyChange, len(proof.KeyChanges))
+	for i, kv := range proof.KeyChanges {
+		var value pb.MaybeBytes
+		if kv.Value.hasValue {
+			value = pb.MaybeBytes{
+				Value:     kv.Value.value,
+				IsNothing: false,
+			}
+		} else {
+			value = pb.MaybeBytes{
+				Value:     nil,
+				IsNothing: true,
+			}
 		}
-		return nil
-	}
-
-	switch {
-	case proof.Empty():
-		return ErrNoMerkleProof
-	case len(end) > 0 && len(proof.EndProof) == 0:
-		// We requested an end proof but didn't get one.
-		return ErrNoEndProof
-	case len(start) > 0 && len(proof.StartProof) == 0 && len(proof.EndProof) == 0:
-		// We requested a start proof but didn't get one.
-		// Note that we also have to check that [proof.EndProof] is empty
-		// to handle the case that the start proof is empty because all
-		// its nodes are also in the end proof, and those nodes are omitted.
-		return ErrNoStartProof
-	}
-
-	keyValues := make(map[path]Maybe[[]byte], len(proof.KeyValues))
-	for _, keyValue := range proof.KeyValues {
-		keyValues[newPath(keyValue.Key)] = Some(keyValue.Value)
-	}
-	for _, key := range proof.DeletedKeys {
-		keyValues[newPath(key)] = Nothing[[]byte]()
-	}
-
-	// Make sure the key-value pairs are sorted and in [start, end].
-	if err := verifyKeyValues(proof.KeyValues, start, end); err != nil {
-		return err
-	}
-
-	// Make sure the deleted keys are sorted and in [start, end].
-	for i := 0; i < len(proof.DeletedKeys); i++ {
-		deletedKey := proof.DeletedKeys[i]
-		if i < len(proof.DeletedKeys)-1 && bytes.Compare(deletedKey, proof.DeletedKeys[i+1]) >= 0 {
-			return ErrNonIncreasingValues
-		}
-		if (len(start) > 0 && bytes.Compare(deletedKey, start) < 0) ||
-			(len(end) > 0 && bytes.Compare(deletedKey, end) > 0) {
-			return ErrStateFromOutsideOfRange
+		keyChanges[i] = &pb.KeyChange{
+			Key:   kv.Key,
+			Value: &value,
 		}
 	}
 
-	largestKey := end
-
-	// Find the greatest key in [proof.KeyValues] and [proof.DeletedKeys].
-	// Note that [proof.EndProof] is a proof for this key.
-	// [largestKey] is also used when we add children of proof nodes to [trie] below.
-	if len(proof.KeyValues) > 0 {
-		largestKey = proof.KeyValues[len(proof.KeyValues)-1].Key
+	return &pb.ChangeProof{
+		HadRootsInHistory: proof.HadRootsInHistory,
+		StartProof:        startProof,
+		EndProof:          endProof,
+		KeyChanges:        keyChanges,
 	}
-	if len(proof.DeletedKeys) > 0 {
-		lastDeleted := proof.DeletedKeys[len(proof.DeletedKeys)-1]
-		if bytes.Compare(lastDeleted, largestKey) > 0 {
-			largestKey = lastDeleted
-		}
+}
+
+func (proof *ChangeProof) UnmarshalProto(pbProof *pb.ChangeProof) error {
+	if pbProof == nil {
+		return ErrNilChangeProof
 	}
 
-	smallestPath := newPath(start)
-	largestPath := newPath(largestKey)
+	proof.HadRootsInHistory = pbProof.HadRootsInHistory
 
-	// Make sure the start proof, if given, is well-formed.
-	if err := verifyProofPath(proof.StartProof, smallestPath); err != nil {
-		return err
-	}
-	if err := verifyAllChangeProofKeyValuesPresent(
-		ctx,
-		db,
-		proof.StartProof,
-		smallestPath,
-		largestPath,
-		keyValues,
-	); err != nil {
-		return err
-	}
-
-	// Make sure the end proof, if given, is well-formed.
-	if err := verifyProofPath(proof.EndProof, largestPath); err != nil {
-		return err
-	}
-	if err := verifyAllChangeProofKeyValuesPresent(
-		ctx,
-		db,
-		proof.EndProof,
-		smallestPath,
-		largestPath,
-		keyValues,
-	); err != nil {
-		return err
-	}
-
-	db.lock.RLock()
-	defer db.lock.RUnlock()
-
-	// Don't need to lock [view] because nobody else has a reference to it.
-	view, err := db.newUntrackedView(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Insert the key-value pairs into the trie.
-	for _, kv := range proof.KeyValues {
-		if _, err := view.insertIntoTrie(ctx, newPath(kv.Key), Some(kv.Value)); err != nil {
+	proof.StartProof = make([]ProofNode, len(pbProof.StartProof))
+	for i, protoNode := range pbProof.StartProof {
+		if err := proof.StartProof[i].UnmarshalProto(protoNode); err != nil {
 			return err
 		}
 	}
 
-	// Remove the deleted keys from the trie.
-	for _, key := range proof.DeletedKeys {
-		if err := view.removeFromTrie(ctx, newPath(key)); err != nil {
+	proof.EndProof = make([]ProofNode, len(pbProof.EndProof))
+	for i, protoNode := range pbProof.EndProof {
+		if err := proof.EndProof[i].UnmarshalProto(protoNode); err != nil {
 			return err
 		}
 	}
 
-	// For all the nodes along the edges of the proof, insert children < [start] and > [largestKey]
-	// into the trie so that we get the expected root ID (if this proof is valid).
-	if err := addPathInfo(ctx, view, proof.StartProof, smallestPath, largestPath); err != nil {
-		return err
-	}
-	if err := addPathInfo(ctx, view, proof.EndProof, smallestPath, largestPath); err != nil {
-		return err
-	}
+	proof.KeyChanges = make([]KeyChange, len(pbProof.KeyChanges))
+	for i, kv := range pbProof.KeyChanges {
+		if kv.Value == nil {
+			return ErrNilMaybeBytes
+		}
 
-	// Make sure we get the expected root.
-	calculatedRoot, err := view.getMerkleRoot(ctx)
-	if err != nil {
-		return err
-	}
-	if expectedEndRootID != calculatedRoot {
-		return fmt.Errorf("%w:[%s], expected:[%s]", ErrInvalidProof, calculatedRoot, expectedEndRootID)
+		if kv.Value.IsNothing && len(kv.Value.Value) != 0 {
+			return ErrInvalidMaybe
+		}
+
+		value := Nothing[[]byte]()
+		if !kv.Value.IsNothing {
+			value = Some(kv.Value.Value)
+		}
+		proof.KeyChanges[i] = KeyChange{
+			Key:   kv.Key,
+			Value: value,
+		}
 	}
 
 	return nil
@@ -473,7 +570,7 @@ func (proof *ChangeProof) Verify(
 // - if the node's path is within the key range, that has a value that matches the value passed in the change list or in the db
 func verifyAllChangeProofKeyValuesPresent(
 	ctx context.Context,
-	db *Database,
+	db MerkleDB,
 	proof []ProofNode,
 	start path,
 	end path,
@@ -513,8 +610,35 @@ func verifyAllChangeProofKeyValuesPresent(
 }
 
 func (proof *ChangeProof) Empty() bool {
-	return len(proof.KeyValues) == 0 && len(proof.DeletedKeys) == 0 &&
+	return len(proof.KeyChanges) == 0 &&
 		len(proof.StartProof) == 0 && len(proof.EndProof) == 0
+}
+
+// Returns nil iff both hold:
+// 1. [kvs] is sorted by key in increasing order.
+// 2. All keys in [kvs] are in the range [start, end].
+// If [start] is nil, there is no lower bound on acceptable keys.
+// If [end] is nil, there is no upper bound on acceptable keys.
+// If [kvs] is empty, returns nil.
+func verifyKeyChanges(kvs []KeyChange, start, end []byte) error {
+	if len(kvs) == 0 {
+		return nil
+	}
+
+	// ensure that the keys are in increasing order
+	for i := 0; i < len(kvs)-1; i++ {
+		if bytes.Compare(kvs[i].Key, kvs[i+1].Key) >= 0 {
+			return ErrNonIncreasingValues
+		}
+	}
+
+	// ensure that the keys are within the range [start, end]
+	if (len(start) > 0 && bytes.Compare(kvs[0].Key, start) < 0) ||
+		(len(end) > 0 && bytes.Compare(kvs[len(kvs)-1].Key, end) > 0) {
+		return ErrStateFromOutsideOfRange
+	}
+
+	return nil
 }
 
 // Returns nil iff both hold:
@@ -607,9 +731,8 @@ func valueOrHashMatches(value Maybe[[]byte], valueOrHash Maybe[[]byte]) bool {
 // For each proof node, adds the children that are < [start] or > [end].
 // If [start] is empty, no children are < [start].
 // If [end] is empty, no children are > [end].
-// Assumes [t]'s view stack is locked.
+// Assumes [t.lock] is held.
 func addPathInfo(
-	ctx context.Context,
 	t *trieView,
 	proofPath []ProofNode,
 	startPath path,
@@ -631,7 +754,7 @@ func addPathInfo(
 
 		// load the node associated with the key or create a new one
 		// pass nothing because we are going to overwrite the value digest below
-		n, err := t.insertIntoTrie(ctx, keyPath, Nothing[[]byte]())
+		n, err := t.insertIntoTrie(keyPath, Nothing[[]byte]())
 		if err != nil {
 			return err
 		}
@@ -671,9 +794,8 @@ func getEmptyTrieView(ctx context.Context) (*trieView, error) {
 		ctx,
 		memdb.New(),
 		Config{
-			Tracer:         tracer,
-			ValueCacheSize: verificationCacheSize,
-			NodeCacheSize:  verificationCacheSize,
+			Tracer:        tracer,
+			NodeCacheSize: verificationCacheSize,
 		},
 		&mockMetrics{},
 	)
@@ -681,5 +803,5 @@ func getEmptyTrieView(ctx context.Context) (*trieView, error) {
 		return nil, err
 	}
 
-	return db.newUntrackedView(ctx)
+	return db.newUntrackedView(defaultPreallocationSize)
 }

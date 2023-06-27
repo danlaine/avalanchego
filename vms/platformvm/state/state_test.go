@@ -1,12 +1,13 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package state
 
 import (
-	"math"
 	"testing"
 	"time"
+
+	stdmath "math"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -17,8 +18,10 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
 	"github.com/ava-labs/avalanchego/snow/validators"
+	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/bls"
+	"github.com/ava-labs/avalanchego/utils/math"
 	"github.com/ava-labs/avalanchego/utils/units"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/avalanchego/vms/components/avax"
@@ -507,6 +510,7 @@ func newStateFromDB(require *require.Assertions, db database.Database) State {
 			MintingPeriod:      365 * 24 * time.Hour,
 			SupplyCap:          720 * units.MegaAvax,
 		}),
+		&utils.Atomic[bool]{},
 	)
 	require.NoError(err)
 	require.NotNil(state)
@@ -515,18 +519,18 @@ func newStateFromDB(require *require.Assertions, db database.Database) State {
 
 func TestValidatorWeightDiff(t *testing.T) {
 	type test struct {
-		name      string
-		ops       []func(*ValidatorWeightDiff) error
-		shouldErr bool
-		expected  ValidatorWeightDiff
+		name        string
+		ops         []func(*ValidatorWeightDiff) error
+		expected    *ValidatorWeightDiff
+		expectedErr error
 	}
 
 	tests := []test{
 		{
-			name:      "no ops",
-			ops:       []func(*ValidatorWeightDiff) error{},
-			shouldErr: false,
-			expected:  ValidatorWeightDiff{},
+			name:        "no ops",
+			ops:         []func(*ValidatorWeightDiff) error{},
+			expected:    &ValidatorWeightDiff{},
+			expectedErr: nil,
 		},
 		{
 			name: "simple decrease",
@@ -538,24 +542,24 @@ func TestValidatorWeightDiff(t *testing.T) {
 					return d.Add(true, 1)
 				},
 			},
-			shouldErr: false,
-			expected: ValidatorWeightDiff{
+			expected: &ValidatorWeightDiff{
 				Decrease: true,
 				Amount:   2,
 			},
+			expectedErr: nil,
 		},
 		{
 			name: "decrease overflow",
 			ops: []func(*ValidatorWeightDiff) error{
 				func(d *ValidatorWeightDiff) error {
-					return d.Add(true, math.MaxUint64)
+					return d.Add(true, stdmath.MaxUint64)
 				},
 				func(d *ValidatorWeightDiff) error {
 					return d.Add(true, 1)
 				},
 			},
-			shouldErr: true,
-			expected:  ValidatorWeightDiff{},
+			expected:    &ValidatorWeightDiff{},
+			expectedErr: math.ErrOverflow,
 		},
 		{
 			name: "simple increase",
@@ -567,24 +571,24 @@ func TestValidatorWeightDiff(t *testing.T) {
 					return d.Add(false, 1)
 				},
 			},
-			shouldErr: false,
-			expected: ValidatorWeightDiff{
+			expected: &ValidatorWeightDiff{
 				Decrease: false,
 				Amount:   2,
 			},
+			expectedErr: nil,
 		},
 		{
 			name: "increase overflow",
 			ops: []func(*ValidatorWeightDiff) error{
 				func(d *ValidatorWeightDiff) error {
-					return d.Add(false, math.MaxUint64)
+					return d.Add(false, stdmath.MaxUint64)
 				},
 				func(d *ValidatorWeightDiff) error {
 					return d.Add(false, 1)
 				},
 			},
-			shouldErr: true,
-			expected:  ValidatorWeightDiff{},
+			expected:    &ValidatorWeightDiff{},
+			expectedErr: math.ErrOverflow,
 		},
 		{
 			name: "varied use",
@@ -628,11 +632,11 @@ func TestValidatorWeightDiff(t *testing.T) {
 					return d.Add(true, 2) // Value -2
 				},
 			},
-			shouldErr: false,
-			expected: ValidatorWeightDiff{
+			expected: &ValidatorWeightDiff{
 				Decrease: true,
 				Amount:   2,
 			},
+			expectedErr: nil,
 		},
 	}
 
@@ -644,12 +648,10 @@ func TestValidatorWeightDiff(t *testing.T) {
 			for _, op := range tt.ops {
 				errs.Add(op(diff))
 			}
-			if tt.shouldErr {
-				require.Error(errs.Err)
-				return
+			require.ErrorIs(errs.Err, tt.expectedErr)
+			if tt.expectedErr == nil {
+				require.Equal(tt.expected, diff)
 			}
-			require.NoError(errs.Err)
-			require.Equal(tt.expected, *diff)
 		})
 	}
 }

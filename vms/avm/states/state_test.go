@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package states
@@ -280,9 +280,8 @@ func TestInitializeChainState(t *testing.T) {
 	require.NoError(err)
 
 	stopVertexID := ids.GenerateTestID()
-	genesisTimestamp := version.XChainMigrationDefaultTime
-	err = s.InitializeChainState(stopVertexID, genesisTimestamp)
-	require.NoError(err)
+	genesisTimestamp := version.CortinaDefaultTime
+	require.NoError(s.InitializeChainState(stopVertexID, genesisTimestamp))
 
 	lastAcceptedID := s.GetLastAccepted()
 	genesis, err := s.GetBlock(lastAcceptedID)
@@ -301,11 +300,9 @@ func TestInitializeChainState(t *testing.T) {
 
 	s.AddBlock(childBlock)
 	s.SetLastAccepted(childBlock.ID())
-	err = s.Commit()
-	require.NoError(err)
+	require.NoError(s.Commit())
 
-	err = s.InitializeChainState(stopVertexID, genesisTimestamp)
-	require.NoError(err)
+	require.NoError(s.InitializeChainState(stopVertexID, genesisTimestamp))
 
 	lastAcceptedID = s.GetLastAccepted()
 	lastAccepted, err := s.GetBlock(lastAcceptedID)

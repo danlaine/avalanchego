@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package sync
@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	_ SyncMetrics = &mockMetrics{}
-	_ SyncMetrics = &metrics{}
+	_ SyncMetrics = (*mockMetrics)(nil)
+	_ SyncMetrics = (*metrics)(nil)
 )
 
 type SyncMetrics interface {

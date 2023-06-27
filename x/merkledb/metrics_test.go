@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package merkledb
@@ -20,23 +20,20 @@ func Test_Metrics_Basic_Usage(t *testing.T) {
 		context.Background(),
 		memdb.New(),
 		Config{
-			Tracer:         newNoopTracer(),
-			HistoryLength:  300,
-			ValueCacheSize: minCacheSize,
-			NodeCacheSize:  minCacheSize,
+			Tracer:        newNoopTracer(),
+			HistoryLength: 300,
+			NodeCacheSize: minCacheSize,
 		},
 	)
 	require.NoError(t, err)
 
-	err = db.Put([]byte("key"), []byte("value"))
-	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte("key"), []byte("value")))
 
 	require.Equal(t, int64(1), db.metrics.(*mockMetrics).keyReadCount)
 	require.Equal(t, int64(1), db.metrics.(*mockMetrics).keyWriteCount)
 	require.Equal(t, int64(3), db.metrics.(*mockMetrics).hashCount)
 
-	err = db.Delete([]byte("key"))
-	require.NoError(t, err)
+	require.NoError(t, db.Delete([]byte("key")))
 
 	require.Equal(t, int64(1), db.metrics.(*mockMetrics).keyReadCount)
 	require.Equal(t, int64(2), db.metrics.(*mockMetrics).keyWriteCount)
@@ -55,22 +52,19 @@ func Test_Metrics_Initialize(t *testing.T) {
 		context.Background(),
 		memdb.New(),
 		Config{
-			Tracer:         newNoopTracer(),
-			HistoryLength:  300,
-			Reg:            prometheus.NewRegistry(),
-			ValueCacheSize: 1000,
-			NodeCacheSize:  1000,
+			Tracer:        newNoopTracer(),
+			HistoryLength: 300,
+			Reg:           prometheus.NewRegistry(),
+			NodeCacheSize: 1000,
 		},
 	)
 	require.NoError(t, err)
 
-	err = db.Put([]byte("key"), []byte("value"))
-	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte("key"), []byte("value")))
 
 	val, err := db.Get([]byte("key"))
 	require.NoError(t, err)
 	require.Equal(t, []byte("value"), val)
 
-	err = db.Delete([]byte("key"))
-	require.NoError(t, err)
+	require.NoError(t, db.Delete([]byte("key")))
 }

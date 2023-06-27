@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
@@ -152,7 +152,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 			txF: func() *txs.AddPermissionlessValidatorTx {
 				return &verifiedTx
 			},
-			expectedErr: errTimestampNotBeforeStartTime,
+			expectedErr: ErrTimestampNotBeforeStartTime,
 		},
 		{
 			name: "weight too low",
@@ -178,7 +178,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 				tx.Validator.Wght = unsignedTransformTx.MinValidatorStake - 1
 				return &tx
 			},
-			expectedErr: errWeightTooSmall,
+			expectedErr: ErrWeightTooSmall,
 		},
 		{
 			name: "weight too high",
@@ -204,7 +204,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 				tx.Validator.Wght = unsignedTransformTx.MaxValidatorStake + 1
 				return &tx
 			},
-			expectedErr: errWeightTooLarge,
+			expectedErr: ErrWeightTooLarge,
 		},
 		{
 			name: "insufficient delegation fee",
@@ -231,7 +231,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 				tx.DelegationShares = unsignedTransformTx.MinDelegationFee - 1
 				return &tx
 			},
-			expectedErr: errInsufficientDelegationFee,
+			expectedErr: ErrInsufficientDelegationFee,
 		},
 		{
 			name: "duration too short",
@@ -261,7 +261,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 				tx.Validator.End = uint64(unsignedTransformTx.MinStakeDuration)
 				return &tx
 			},
-			expectedErr: errStakeTooShort,
+			expectedErr: ErrStakeTooShort,
 		},
 		{
 			name: "duration too long",
@@ -291,7 +291,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 				tx.Validator.End = 2 + uint64(unsignedTransformTx.MaxStakeDuration)
 				return &tx
 			},
-			expectedErr: errStakeTooLong,
+			expectedErr: ErrStakeTooLong,
 		},
 		{
 			name: "wrong assetID",
@@ -323,7 +323,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 				}
 				return &tx
 			},
-			expectedErr: errWrongStakedAssetID,
+			expectedErr: ErrWrongStakedAssetID,
 		},
 		{
 			name: "duplicate validator",
@@ -349,7 +349,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 			txF: func() *txs.AddPermissionlessValidatorTx {
 				return &verifiedTx
 			},
-			expectedErr: errDuplicateValidator,
+			expectedErr: ErrDuplicateValidator,
 		},
 		{
 			name: "validator not subset of primary network validator",
@@ -381,7 +381,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 			txF: func() *txs.AddPermissionlessValidatorTx {
 				return &verifiedTx
 			},
-			expectedErr: errValidatorSubset,
+			expectedErr: ErrValidatorSubset,
 		},
 		{
 			name: "flow check fails",
@@ -397,7 +397,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 					gomock.Any(),
 					gomock.Any(),
 					gomock.Any(),
-				).Return(errFlowCheckFailed)
+				).Return(ErrFlowCheckFailed)
 
 				return &Backend{
 					FlowChecker: flowChecker,
@@ -427,7 +427,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 			txF: func() *txs.AddPermissionlessValidatorTx {
 				return &verifiedTx
 			},
-			expectedErr: errFlowCheckFailed,
+			expectedErr: ErrFlowCheckFailed,
 		},
 		{
 			name: "starts too far in the future",
@@ -477,7 +477,7 @@ func TestVerifyAddPermissionlessValidatorTx(t *testing.T) {
 				tx.Validator.End = tx.Validator.Start + uint64(unsignedTransformTx.MinStakeDuration)
 				return &tx
 			},
-			expectedErr: errFutureStakeTime,
+			expectedErr: ErrFutureStakeTime,
 		},
 		{
 			name: "success",
@@ -615,7 +615,7 @@ func TestGetValidatorRules(t *testing.T) {
 				return state
 			},
 			expectedRules: &addValidatorRules{},
-			expectedErr:   errIsNotTransformSubnetTx,
+			expectedErr:   ErrIsNotTransformSubnetTx,
 		},
 		{
 			name:     "subnet",
@@ -640,8 +640,8 @@ func TestGetValidatorRules(t *testing.T) {
 				assetID:           customAssetID,
 				minValidatorStake: config.MinValidatorStake,
 				maxValidatorStake: config.MaxValidatorStake,
-				minStakeDuration:  time.Duration(1337) * time.Second,
-				maxStakeDuration:  time.Duration(42) * time.Second,
+				minStakeDuration:  1337 * time.Second,
+				maxStakeDuration:  42 * time.Second,
 				minDelegationFee:  config.MinDelegationFee,
 			},
 			expectedErr: nil,
@@ -657,7 +657,7 @@ func TestGetValidatorRules(t *testing.T) {
 			chainState := tt.chainStateF(ctrl)
 			rules, err := getValidatorRules(tt.backend, chainState, tt.subnetID)
 			if tt.expectedErr != nil {
-				require.ErrorIs(tt.expectedErr, err)
+				require.ErrorIs(err, tt.expectedErr)
 				return
 			}
 			require.NoError(err)
@@ -733,7 +733,7 @@ func TestGetDelegatorRules(t *testing.T) {
 				return state
 			},
 			expectedRules: &addDelegatorRules{},
-			expectedErr:   errIsNotTransformSubnetTx,
+			expectedErr:   ErrIsNotTransformSubnetTx,
 		},
 		{
 			name:     "subnet",
@@ -760,8 +760,8 @@ func TestGetDelegatorRules(t *testing.T) {
 				assetID:                  customAssetID,
 				minDelegatorStake:        config.MinDelegatorStake,
 				maxValidatorStake:        config.MaxValidatorStake,
-				minStakeDuration:         time.Duration(1337) * time.Second,
-				maxStakeDuration:         time.Duration(42) * time.Second,
+				minStakeDuration:         1337 * time.Second,
+				maxStakeDuration:         42 * time.Second,
 				maxValidatorWeightFactor: 21,
 			},
 			expectedErr: nil,
@@ -776,7 +776,7 @@ func TestGetDelegatorRules(t *testing.T) {
 			chainState := tt.chainStateF(ctrl)
 			rules, err := getDelegatorRules(tt.backend, chainState, tt.subnetID)
 			if tt.expectedErr != nil {
-				require.ErrorIs(tt.expectedErr, err)
+				require.ErrorIs(err, tt.expectedErr)
 				return
 			}
 			require.NoError(err)

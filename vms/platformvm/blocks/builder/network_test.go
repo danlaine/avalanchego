@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package builder
@@ -12,7 +12,7 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
-	"github.com/ava-labs/avalanchego/vms/platformvm/message"
+	"github.com/ava-labs/avalanchego/vms/components/message"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
 
 	txbuilder "github.com/ava-labs/avalanchego/vms/platformvm/txs/builder"
@@ -60,14 +60,13 @@ func TestMempoolValidGossipedTxIsAddedToMempool(t *testing.T) {
 	// Free lock because [AppGossip] waits for the context lock
 	env.ctx.Lock.Unlock()
 	// show that unknown tx is added to mempool
-	err = env.AppGossip(context.Background(), nodeID, msgBytes)
-	require.NoError(err)
+	require.NoError(env.AppGossip(context.Background(), nodeID, msgBytes))
 	require.True(env.Builder.Has(txID))
 	// Grab lock back
 	env.ctx.Lock.Lock()
 
 	// and gossiped if it has just been discovered
-	require.True(gossipedBytes != nil)
+	require.NotNil(gossipedBytes)
 
 	// show gossiped bytes can be decoded to the original tx
 	replyIntf, err := message.Parse(gossipedBytes)
@@ -93,7 +92,7 @@ func TestMempoolInvalidGossipedTxIsNotAddedToMempool(t *testing.T) {
 	// create a tx and mark as invalid
 	tx := getValidTx(env.txBuilder, t)
 	txID := tx.ID()
-	env.Builder.MarkDropped(txID, "dropped for testing")
+	env.Builder.MarkDropped(txID, errTestingDropped)
 
 	// show that the invalid tx is not requested
 	nodeID := ids.GenerateTestNodeID()
@@ -101,9 +100,8 @@ func TestMempoolInvalidGossipedTxIsNotAddedToMempool(t *testing.T) {
 	msgBytes, err := message.Build(&msg)
 	require.NoError(err)
 	env.ctx.Lock.Unlock()
-	err = env.AppGossip(context.Background(), nodeID, msgBytes)
+	require.NoError(env.AppGossip(context.Background(), nodeID, msgBytes))
 	env.ctx.Lock.Lock()
-	require.NoError(err)
 	require.False(env.Builder.Has(txID))
 }
 
@@ -127,9 +125,8 @@ func TestMempoolNewLocaTxIsGossiped(t *testing.T) {
 	tx := getValidTx(env.txBuilder, t)
 	txID := tx.ID()
 
-	err := env.Builder.AddUnverifiedTx(tx)
-	require.NoError(err)
-	require.True(gossipedBytes != nil)
+	require.NoError(env.Builder.AddUnverifiedTx(tx))
+	require.NotNil(gossipedBytes)
 
 	// show gossiped bytes can be decoded to the original tx
 	replyIntf, err := message.Parse(gossipedBytes)
@@ -144,8 +141,7 @@ func TestMempoolNewLocaTxIsGossiped(t *testing.T) {
 	// show that transaction is not re-gossiped is recently added to mempool
 	gossipedBytes = nil
 	env.Builder.Remove([]*txs.Tx{tx})
-	err = env.Builder.Add(tx)
-	require.NoError(err)
+	require.NoError(env.Builder.Add(tx))
 
-	require.True(gossipedBytes == nil)
+	require.Nil(gossipedBytes)
 }

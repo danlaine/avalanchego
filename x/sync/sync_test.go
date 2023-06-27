@@ -16,14 +16,17 @@ import (
 
 	"golang.org/x/exp/slices"
 
+	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/memdb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/trace"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/x/merkledb"
+
+	pb "github.com/ava-labs/avalanchego/proto/pb/sync"
 )
 
-var _ Client = &mockClient{}
+var _ Client = (*mockClient)(nil)
 
 func newNoopTracer() trace.Tracer {
 	tracer, _ := trace.New(trace.Config{Enabled: false})
@@ -31,27 +34,34 @@ func newNoopTracer() trace.Tracer {
 }
 
 type mockClient struct {
-	db *merkledb.Database
+	db SyncableDB
 }
 
-func (client *mockClient) GetChangeProof(ctx context.Context, request *ChangeProofRequest, _ *merkledb.Database) (*merkledb.ChangeProof, error) {
-	return client.db.GetChangeProof(ctx, request.StartingRoot, request.EndingRoot, request.Start, request.End, int(request.Limit))
+func (client *mockClient) GetChangeProof(ctx context.Context, request *pb.SyncGetChangeProofRequest, _ SyncableDB) (*merkledb.ChangeProof, error) {
+	startRoot, err := ids.ToID(request.StartRootHash)
+	if err != nil {
+		return nil, err
+	}
+	endRoot, err := ids.ToID(request.EndRootHash)
+	if err != nil {
+		return nil, err
+	}
+	return client.db.GetChangeProof(ctx, startRoot, endRoot, request.StartKey, request.EndKey, int(request.KeyLimit))
 }
 
-func (client *mockClient) GetRangeProof(ctx context.Context, request *RangeProofRequest) (*merkledb.RangeProof, error) {
-	return client.db.GetRangeProofAtRoot(ctx, request.Root, request.Start, request.End, int(request.Limit))
+func (client *mockClient) GetRangeProof(ctx context.Context, request *pb.SyncGetRangeProofRequest) (*merkledb.RangeProof, error) {
+	root, err := ids.ToID(request.RootHash)
+	if err != nil {
+		return nil, err
+	}
+	return client.db.GetRangeProofAtRoot(ctx, root, request.StartKey, request.EndKey, int(request.KeyLimit))
 }
 
 func Test_Creation(t *testing.T) {
 	db, err := merkledb.New(
 		context.Background(),
 		memdb.New(),
-		merkledb.Config{
-			Tracer:         newNoopTracer(),
-			HistoryLength:  0,
-			ValueCacheSize: 1000,
-			NodeCacheSize:  1000,
-		},
+		newDefaultDBConfig(),
 	)
 	require.NoError(t, err)
 
@@ -70,16 +80,10 @@ func Test_Completion(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-
 		emptyDB, err := merkledb.New(
 			context.Background(),
 			memdb.New(),
-			merkledb.Config{
-				Tracer:         newNoopTracer(),
-				HistoryLength:  0,
-				ValueCacheSize: 1000,
-				NodeCacheSize:  1000,
-			},
+			newDefaultDBConfig(),
 		)
 		require.NoError(t, err)
 		emptyRoot, err := emptyDB.GetMerkleRoot(context.Background())
@@ -87,12 +91,7 @@ func Test_Completion(t *testing.T) {
 		db, err := merkledb.New(
 			context.Background(),
 			memdb.New(),
-			merkledb.Config{
-				Tracer:         newNoopTracer(),
-				HistoryLength:  0,
-				ValueCacheSize: 1000,
-				NodeCacheSize:  1000,
-			},
+			newDefaultDBConfig(),
 		)
 		require.NoError(t, err)
 		syncer, err := NewStateSyncManager(StateSyncConfig{
@@ -104,12 +103,10 @@ func Test_Completion(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, syncer)
-		err = syncer.StartSyncing(context.Background())
-		require.NoError(t, err)
-		err = syncer.Wait(context.Background())
-		require.NoError(t, err)
+		require.NoError(t, syncer.StartSyncing(context.Background()))
+		require.NoError(t, syncer.Wait(context.Background()))
 		syncer.workLock.Lock()
-		require.Equal(t, 0, syncer.unprocessedWork.Len())
+		require.Zero(t, syncer.unprocessedWork.Len())
 		require.Equal(t, 1, syncer.processedWork.Len())
 		syncer.workLock.Unlock()
 	}
@@ -180,7 +177,9 @@ func Test_Midpoint(t *testing.T) {
 
 func Test_Sync_FindNextKey_InSync(t *testing.T) {
 	for i := 0; i < 3; i++ {
-		r := rand.New(rand.NewSource(int64(i))) // #nosec G404
+		now := time.Now().UnixNano()
+		t.Logf("seed: %d", now)
+		r := rand.New(rand.NewSource(now)) // #nosec G404
 		dbToSync, err := generateTrie(t, r, 1000)
 		require.NoError(t, err)
 		syncRoot, err := dbToSync.GetMerkleRoot(context.Background())
@@ -189,12 +188,7 @@ func Test_Sync_FindNextKey_InSync(t *testing.T) {
 		db, err := merkledb.New(
 			context.Background(),
 			memdb.New(),
-			merkledb.Config{
-				Tracer:         newNoopTracer(),
-				HistoryLength:  0,
-				ValueCacheSize: 1000,
-				NodeCacheSize:  1000,
-			},
+			newDefaultDBConfig(),
 		)
 		require.NoError(t, err)
 		syncer, err := NewStateSyncManager(StateSyncConfig{
@@ -207,10 +201,8 @@ func Test_Sync_FindNextKey_InSync(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, syncer)
 
-		err = syncer.StartSyncing(context.Background())
-		require.NoError(t, err)
-		err = syncer.Wait(context.Background())
-		require.NoError(t, err)
+		require.NoError(t, syncer.StartSyncing(context.Background()))
+		require.NoError(t, syncer.Wait(context.Background()))
 
 		proof, err := dbToSync.GetRangeProof(context.Background(), nil, nil, 500)
 		require.NoError(t, err)
@@ -223,8 +215,7 @@ func Test_Sync_FindNextKey_InSync(t *testing.T) {
 
 		// add an extra value to sync db past the last key returned
 		newKey := midPoint(lastKey, nil)
-		err = db.Put(newKey, []byte{1})
-		require.NoError(t, err)
+		require.NoError(t, db.Put(newKey, []byte{1}))
 
 		// create a range endpoint that is before the newly added key, but after the last key
 		endPointBeforeNewKey := make([]byte, 0, 2)
@@ -258,9 +249,114 @@ func Test_Sync_FindNextKey_InSync(t *testing.T) {
 	}
 }
 
+func Test_Sync_FindNextKey_Deleted(t *testing.T) {
+	db, err := merkledb.New(
+		context.Background(),
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte{0x10}, []byte{1}))
+	require.NoError(t, db.Put([]byte{0x11, 0x11}, []byte{2}))
+
+	syncRoot, err := db.GetMerkleRoot(context.Background())
+	require.NoError(t, err)
+
+	syncer, err := NewStateSyncManager(StateSyncConfig{
+		SyncDB:                db,
+		Client:                &mockClient{db: nil},
+		TargetRoot:            syncRoot,
+		SimultaneousWorkLimit: 5,
+		Log:                   logging.NoLog{},
+	})
+	require.NoError(t, err)
+
+	// 0x12 was "deleted" and there should be no extra node in the proof since there was nothing with a common prefix
+	noExtraNodeProof, err := db.GetProof(context.Background(), []byte{0x12})
+	require.NoError(t, err)
+
+	// 0x11 was "deleted" and 0x11.0x11 should be in the exclusion proof
+	extraNodeProof, err := db.GetProof(context.Background(), []byte{0x11})
+	require.NoError(t, err)
+
+	// there is now another value in the range that needs to be sync'ed
+	require.NoError(t, db.Put([]byte{0x13}, []byte{3}))
+
+	nextKey, err := syncer.findNextKey(context.Background(), []byte{0x12}, []byte{0x20}, noExtraNodeProof.Path)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x13}, nextKey)
+
+	nextKey, err = syncer.findNextKey(context.Background(), []byte{0x11}, []byte{0x20}, extraNodeProof.Path)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x13}, nextKey)
+}
+
+func Test_Sync_FindNextKey_BranchInLocal(t *testing.T) {
+	db, err := merkledb.New(
+		context.Background(),
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte{0x11}, []byte{1}))
+	require.NoError(t, db.Put([]byte{0x11, 0x11}, []byte{2}))
+
+	syncRoot, err := db.GetMerkleRoot(context.Background())
+	require.NoError(t, err)
+	proof, err := db.GetProof(context.Background(), []byte{0x11, 0x11})
+	require.NoError(t, err)
+
+	syncer, err := NewStateSyncManager(StateSyncConfig{
+		SyncDB:                db,
+		Client:                &mockClient{db: nil},
+		TargetRoot:            syncRoot,
+		SimultaneousWorkLimit: 5,
+		Log:                   logging.NoLog{},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte{0x12}, []byte{4}))
+
+	nextKey, err := syncer.findNextKey(context.Background(), []byte{0x11, 0x11}, []byte{0x20}, proof.Path)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x12}, nextKey)
+}
+
+func Test_Sync_FindNextKey_BranchInReceived(t *testing.T) {
+	db, err := merkledb.New(
+		context.Background(),
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, db.Put([]byte{0x11}, []byte{1}))
+	require.NoError(t, db.Put([]byte{0x12}, []byte{2}))
+	require.NoError(t, db.Put([]byte{0x11, 0x11}, []byte{3}))
+
+	syncRoot, err := db.GetMerkleRoot(context.Background())
+	require.NoError(t, err)
+	proof, err := db.GetProof(context.Background(), []byte{0x11, 0x11})
+	require.NoError(t, err)
+
+	syncer, err := NewStateSyncManager(StateSyncConfig{
+		SyncDB:                db,
+		Client:                &mockClient{db: nil},
+		TargetRoot:            syncRoot,
+		SimultaneousWorkLimit: 5,
+		Log:                   logging.NoLog{},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Delete([]byte{0x12}))
+
+	nextKey, err := syncer.findNextKey(context.Background(), []byte{0x11, 0x11}, []byte{0x20}, proof.Path)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x12}, nextKey)
+}
+
 func Test_Sync_FindNextKey_ExtraValues(t *testing.T) {
 	for i := 0; i < 10; i++ {
-		r := rand.New(rand.NewSource(int64(i))) // #nosec G404
+		now := time.Now().UnixNano()
+		t.Logf("seed: %d", now)
+		r := rand.New(rand.NewSource(now)) // #nosec G404
 		dbToSync, err := generateTrie(t, r, 1000)
 		require.NoError(t, err)
 		syncRoot, err := dbToSync.GetMerkleRoot(context.Background())
@@ -269,12 +365,7 @@ func Test_Sync_FindNextKey_ExtraValues(t *testing.T) {
 		db, err := merkledb.New(
 			context.Background(),
 			memdb.New(),
-			merkledb.Config{
-				Tracer:         newNoopTracer(),
-				HistoryLength:  0,
-				ValueCacheSize: 1000,
-				NodeCacheSize:  1000,
-			},
+			newDefaultDBConfig(),
 		)
 		require.NoError(t, err)
 		syncer, err := NewStateSyncManager(StateSyncConfig{
@@ -287,10 +378,8 @@ func Test_Sync_FindNextKey_ExtraValues(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, syncer)
 
-		err = syncer.StartSyncing(context.Background())
-		require.NoError(t, err)
-		err = syncer.Wait(context.Background())
-		require.NoError(t, err)
+		require.NoError(t, syncer.StartSyncing(context.Background()))
+		require.NoError(t, syncer.Wait(context.Background()))
 
 		proof, err := dbToSync.GetRangeProof(context.Background(), nil, nil, 500)
 		require.NoError(t, err)
@@ -299,8 +388,7 @@ func Test_Sync_FindNextKey_ExtraValues(t *testing.T) {
 		lastKey := proof.KeyValues[len(proof.KeyValues)-1].Key
 		midpoint := midPoint(lastKey, nil)
 
-		err = db.Put(midpoint, []byte{1})
-		require.NoError(t, err)
+		require.NoError(t, db.Put(midpoint, []byte{1}))
 
 		// next key at prefix of newly added point
 		nextKey, err := syncer.findNextKey(context.Background(), lastKey, nil, proof.EndProof)
@@ -309,11 +397,9 @@ func Test_Sync_FindNextKey_ExtraValues(t *testing.T) {
 
 		require.True(t, isPrefix(midpoint, nextKey))
 
-		err = db.Delete(midpoint)
-		require.NoError(t, err)
+		require.NoError(t, db.Delete(midpoint))
 
-		err = dbToSync.Put(midpoint, []byte{1})
-		require.NoError(t, err)
+		require.NoError(t, dbToSync.Put(midpoint, []byte{1}))
 
 		proof, err = dbToSync.GetRangeProof(context.Background(), nil, lastKey, 500)
 		require.NoError(t, err)
@@ -343,7 +429,9 @@ func isPrefix(data []byte, prefix []byte) bool {
 
 func Test_Sync_FindNextKey_DifferentChild(t *testing.T) {
 	for i := 0; i < 10; i++ {
-		r := rand.New(rand.NewSource(int64(i))) // #nosec G404
+		now := time.Now().UnixNano()
+		t.Logf("seed: %d", now)
+		r := rand.New(rand.NewSource(now)) // #nosec G404
 		dbToSync, err := generateTrie(t, r, 500)
 		require.NoError(t, err)
 		syncRoot, err := dbToSync.GetMerkleRoot(context.Background())
@@ -352,12 +440,7 @@ func Test_Sync_FindNextKey_DifferentChild(t *testing.T) {
 		db, err := merkledb.New(
 			context.Background(),
 			memdb.New(),
-			merkledb.Config{
-				Tracer:         newNoopTracer(),
-				HistoryLength:  0,
-				ValueCacheSize: 1000,
-				NodeCacheSize:  1000,
-			},
+			newDefaultDBConfig(),
 		)
 		require.NoError(t, err)
 		syncer, err := NewStateSyncManager(StateSyncConfig{
@@ -369,10 +452,8 @@ func Test_Sync_FindNextKey_DifferentChild(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, syncer)
-		err = syncer.StartSyncing(context.Background())
-		require.NoError(t, err)
-		err = syncer.Wait(context.Background())
-		require.NoError(t, err)
+		require.NoError(t, syncer.StartSyncing(context.Background()))
+		require.NoError(t, syncer.Wait(context.Background()))
 
 		proof, err := dbToSync.GetRangeProof(context.Background(), nil, nil, 100)
 		require.NoError(t, err)
@@ -380,11 +461,9 @@ func Test_Sync_FindNextKey_DifferentChild(t *testing.T) {
 
 		// local db has a different child than remote db
 		lastKey = append(lastKey, 16)
-		err = db.Put(lastKey, []byte{1})
-		require.NoError(t, err)
+		require.NoError(t, db.Put(lastKey, []byte{1}))
 
-		err = dbToSync.Put(lastKey, []byte{2})
-		require.NoError(t, err)
+		require.NoError(t, dbToSync.Put(lastKey, []byte{2}))
 
 		proof, err = dbToSync.GetRangeProof(context.Background(), nil, proof.KeyValues[len(proof.KeyValues)-1].Key, 100)
 		require.NoError(t, err)
@@ -395,10 +474,220 @@ func Test_Sync_FindNextKey_DifferentChild(t *testing.T) {
 	}
 }
 
+// Test findNextKey by computing the expected result in a naive, inefficient
+// way and comparing it to the actual result
+func TestFindNextKeyRandom(t *testing.T) {
+	now := time.Now().UnixNano()
+	t.Logf("seed: %d", now)
+	rand := rand.New(rand.NewSource(now)) // #nosec G404
+	require := require.New(t)
+
+	// Create a "remote" database and "local" database
+	remoteDB, err := merkledb.New(
+		context.Background(),
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+
+	localDB, err := merkledb.New(
+		context.Background(),
+		memdb.New(),
+		newDefaultDBConfig(),
+	)
+	require.NoError(err)
+
+	var (
+		numProofsToTest  = 250
+		numKeyValues     = 250
+		maxKeyLen        = 256
+		maxValLen        = 256
+		maxRangeStartLen = 8
+		maxRangeEndLen   = 8
+		maxProofLen      = 128
+	)
+
+	// Put random keys into the databases
+	for _, db := range []database.Database{remoteDB, localDB} {
+		for i := 0; i < numKeyValues; i++ {
+			key := make([]byte, rand.Intn(maxKeyLen))
+			_, _ = rand.Read(key)
+			val := make([]byte, rand.Intn(maxValLen))
+			require.NoError(db.Put(key, val))
+		}
+	}
+
+	// Repeatedly generate end proofs from the remote database and compare
+	// the result of findNextKey to the expected result.
+	for proofIndex := 0; proofIndex < numProofsToTest; proofIndex++ {
+		// Generate a proof for a random key
+		var (
+			rangeStart []byte
+			rangeEnd   []byte
+		)
+		for rangeStart == nil || bytes.Compare(rangeStart, rangeEnd) == 1 {
+			rangeStart = make([]byte, rand.Intn(maxRangeStartLen)+1)
+			_, _ = rand.Read(rangeStart)
+			rangeEnd = make([]byte, rand.Intn(maxRangeEndLen)+1)
+			_, _ = rand.Read(rangeEnd)
+		}
+
+		remoteProof, err := remoteDB.GetRangeProof(
+			context.Background(),
+			rangeStart,
+			rangeEnd,
+			rand.Intn(maxProofLen)+1,
+		)
+		require.NoError(err)
+
+		if len(remoteProof.KeyValues) == 0 {
+			continue
+		}
+		lastReceivedKey := remoteProof.KeyValues[len(remoteProof.KeyValues)-1].Key
+
+		// Commit the proof to the local database as we do
+		// in the actual syncer.
+		require.NoError(localDB.CommitRangeProof(
+			context.Background(),
+			rangeStart,
+			remoteProof,
+		))
+
+		localProof, err := localDB.GetProof(
+			context.Background(),
+			lastReceivedKey,
+		)
+		require.NoError(err)
+
+		type keyAndID struct {
+			key merkledb.SerializedPath
+			id  ids.ID
+		}
+
+		// Set of key prefix/ID pairs proven by the remote database's proof.
+		remoteKeyIDs := []keyAndID{}
+
+		for _, node := range remoteProof.EndProof {
+			for childIdx, childID := range node.Children {
+				remoteKeyIDs = append(remoteKeyIDs, keyAndID{
+					key: node.KeyPath.AppendNibble(childIdx),
+					id:  childID,
+				})
+			}
+		}
+
+		// Set of key prefix/ID pairs proven by the local database's proof.
+		localKeyIDs := []keyAndID{}
+		for _, node := range localProof.Path {
+			for childIdx, childID := range node.Children {
+				localKeyIDs = append(localKeyIDs, keyAndID{
+					key: node.KeyPath.AppendNibble(childIdx),
+					id:  childID,
+				})
+			}
+		}
+
+		// Sort in ascending order by key prefix.
+		serializedPathLess := func(i, j keyAndID) bool {
+			return bytes.Compare(i.key.Value, j.key.Value) < 0 ||
+				(bytes.Equal(i.key.Value, j.key.Value) &&
+					i.key.NibbleLength < j.key.NibbleLength)
+		}
+		slices.SortFunc(remoteKeyIDs, serializedPathLess)
+		slices.SortFunc(localKeyIDs, serializedPathLess)
+
+		// Filter out keys that are before the last received key
+		findBounds := func(keyIDs []keyAndID) (int, int) {
+			var (
+				firstIdxInRange      = len(keyIDs)
+				firstIdxInRangeFound = false
+				firstIdxOutOfRange   = len(keyIDs)
+			)
+			for i, keyID := range keyIDs {
+				if !firstIdxInRangeFound && bytes.Compare(keyID.key.Value, lastReceivedKey) >= 0 {
+					firstIdxInRange = i
+					firstIdxInRangeFound = true
+					continue
+				}
+				if bytes.Compare(keyID.key.Value, rangeEnd) > 0 {
+					firstIdxOutOfRange = i
+					break
+				}
+			}
+			return firstIdxInRange, firstIdxOutOfRange
+		}
+
+		remoteFirstIdxInRange, remoteFirstIdxOutOfRange := findBounds(remoteKeyIDs)
+		remoteKeyIDs = remoteKeyIDs[remoteFirstIdxInRange:remoteFirstIdxOutOfRange]
+
+		localFirstIdxInRange, localFirstIdxOutOfRange := findBounds(localKeyIDs)
+		localKeyIDs = localKeyIDs[localFirstIdxInRange:localFirstIdxOutOfRange]
+
+		// Find smallest difference between the set of key/ID pairs proven by
+		// the remote/local proofs.
+		var (
+			smallestDiffKey merkledb.SerializedPath
+			foundDiff       bool
+		)
+		for i := 0; i < len(remoteKeyIDs) && i < len(localKeyIDs); i++ {
+			// See if the keys are different.
+			smaller, bigger := remoteKeyIDs[i], localKeyIDs[i]
+			if serializedPathLess(localKeyIDs[i], remoteKeyIDs[i]) {
+				smaller, bigger = localKeyIDs[i], remoteKeyIDs[i]
+			}
+
+			if !smaller.key.Equal(bigger.key) {
+				smallestDiffKey = smaller.key
+				foundDiff = true
+				break
+			}
+			// The keys are the same. See if the IDs are different.
+			if smaller.id != bigger.id {
+				smallestDiffKey = smaller.key // Keys are same so either is fine
+				foundDiff = true
+				break
+			}
+		}
+		if !foundDiff {
+			if len(remoteKeyIDs) < len(localKeyIDs) {
+				smallestDiffKey = localKeyIDs[len(remoteKeyIDs)].key
+			} else if len(remoteKeyIDs) > len(localKeyIDs) {
+				smallestDiffKey = remoteKeyIDs[len(localKeyIDs)].key
+			}
+		}
+
+		// Get the actual value from the syncer
+		syncer, err := NewStateSyncManager(StateSyncConfig{
+			SyncDB:                localDB,
+			Client:                &mockClient{db: nil},
+			TargetRoot:            ids.GenerateTestID(),
+			SimultaneousWorkLimit: 5,
+			Log:                   logging.NoLog{},
+		})
+		require.NoError(err)
+
+		gotFirstDiff, err := syncer.findNextKey(
+			context.Background(),
+			lastReceivedKey,
+			rangeEnd,
+			remoteProof.EndProof,
+		)
+		require.NoError(err)
+
+		if bytes.Compare(smallestDiffKey.Value, rangeEnd) >= 0 {
+			require.Nil(gotFirstDiff)
+		} else {
+			require.Equal(smallestDiffKey.Value, gotFirstDiff)
+		}
+	}
+}
+
 func Test_Sync_Result_Correct_Root(t *testing.T) {
 	for i := 0; i < 3; i++ {
-		r := rand.New(rand.NewSource(int64(i))) // #nosec G404
-		dbToSync, err := generateTrie(t, r, 5000)
+		now := time.Now().UnixNano()
+		t.Logf("seed: %d", now)
+		r := rand.New(rand.NewSource(now)) // #nosec G404
+		dbToSync, err := generateTrie(t, r, 1000)
 		require.NoError(t, err)
 		syncRoot, err := dbToSync.GetMerkleRoot(context.Background())
 		require.NoError(t, err)
@@ -406,12 +695,7 @@ func Test_Sync_Result_Correct_Root(t *testing.T) {
 		db, err := merkledb.New(
 			context.Background(),
 			memdb.New(),
-			merkledb.Config{
-				Tracer:         newNoopTracer(),
-				HistoryLength:  0,
-				ValueCacheSize: 1000,
-				NodeCacheSize:  1000,
-			},
+			newDefaultDBConfig(),
 		)
 		require.NoError(t, err)
 		syncer, err := NewStateSyncManager(StateSyncConfig{
@@ -423,11 +707,9 @@ func Test_Sync_Result_Correct_Root(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, syncer)
-		err = syncer.StartSyncing(context.Background())
-		require.NoError(t, err)
+		require.NoError(t, syncer.StartSyncing(context.Background()))
 
-		err = syncer.Wait(context.Background())
-		require.NoError(t, err)
+		require.NoError(t, syncer.Wait(context.Background()))
 		require.NoError(t, syncer.Error())
 
 		// new db has fully sync'ed and should be at the same root as the original db
@@ -436,57 +718,32 @@ func Test_Sync_Result_Correct_Root(t *testing.T) {
 		require.Equal(t, syncRoot, newRoot)
 
 		// make sure they stay in sync
-		for x := 0; x < 50; x++ {
-			addkey := make([]byte, r.Intn(50))
-			_, err = r.Read(addkey)
-			require.NoError(t, err)
-			val := make([]byte, r.Intn(50))
-			_, err = r.Read(val)
-			require.NoError(t, err)
+		addkey := make([]byte, r.Intn(50))
+		_, err = r.Read(addkey)
+		require.NoError(t, err)
+		val := make([]byte, r.Intn(50))
+		_, err = r.Read(val)
+		require.NoError(t, err)
 
-			err = db.Put(addkey, val)
-			require.NoError(t, err)
+		require.NoError(t, db.Put(addkey, val))
 
-			err = dbToSync.Put(addkey, val)
-			require.NoError(t, err)
+		require.NoError(t, dbToSync.Put(addkey, val))
 
-			addNilkey := make([]byte, r.Intn(50))
-			_, err = r.Read(addNilkey)
-			require.NoError(t, err)
-			err = db.Put(addNilkey, nil)
-			require.NoError(t, err)
+		syncRoot, err = dbToSync.GetMerkleRoot(context.Background())
+		require.NoError(t, err)
 
-			err = dbToSync.Put(addNilkey, nil)
-			require.NoError(t, err)
-
-			deleteKeyStart := make([]byte, r.Intn(50))
-			_, err = r.Read(deleteKeyStart)
-			require.NoError(t, err)
-
-			it := dbToSync.NewIteratorWithStart(deleteKeyStart)
-			if it.Next() {
-				err = dbToSync.Delete(it.Key())
-				require.NoError(t, err)
-				err = db.Delete(it.Key())
-				require.NoError(t, err)
-			}
-			require.NoError(t, it.Error())
-			it.Release()
-
-			syncRoot, err = dbToSync.GetMerkleRoot(context.Background())
-			require.NoError(t, err)
-
-			newRoot, err = db.GetMerkleRoot(context.Background())
-			require.NoError(t, err)
-			require.Equal(t, syncRoot, newRoot)
-		}
+		newRoot, err = db.GetMerkleRoot(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, syncRoot, newRoot)
 	}
 }
 
 func Test_Sync_Result_Correct_Root_With_Sync_Restart(t *testing.T) {
-	for i := 0; i < 5; i++ {
-		r := rand.New(rand.NewSource(int64(i))) // #nosec G404
-		dbToSync, err := generateTrie(t, r, 5000)
+	for i := 0; i < 3; i++ {
+		now := time.Now().UnixNano()
+		t.Logf("seed: %d", now)
+		r := rand.New(rand.NewSource(now)) // #nosec G404
+		dbToSync, err := generateTrie(t, r, 3*maxKeyValuesLimit)
 		require.NoError(t, err)
 		syncRoot, err := dbToSync.GetMerkleRoot(context.Background())
 		require.NoError(t, err)
@@ -494,12 +751,7 @@ func Test_Sync_Result_Correct_Root_With_Sync_Restart(t *testing.T) {
 		db, err := merkledb.New(
 			context.Background(),
 			memdb.New(),
-			merkledb.Config{
-				Tracer:         newNoopTracer(),
-				HistoryLength:  0,
-				ValueCacheSize: 1000,
-				NodeCacheSize:  1000,
-			},
+			newDefaultDBConfig(),
 		)
 		require.NoError(t, err)
 
@@ -512,10 +764,21 @@ func Test_Sync_Result_Correct_Root_With_Sync_Restart(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, syncer)
-		err = syncer.StartSyncing(context.Background())
-		require.NoError(t, err)
+		require.NoError(t, syncer.StartSyncing(context.Background()))
 
-		time.Sleep(15 * time.Millisecond)
+		// Wait until we've processed some work
+		// before updating the sync target.
+		require.Eventually(
+			t,
+			func() bool {
+				syncer.workLock.Lock()
+				defer syncer.workLock.Unlock()
+
+				return syncer.processedWork.Len() > 0
+			},
+			5*time.Second,
+			5*time.Millisecond,
+		)
 		syncer.Close()
 
 		newSyncer, err := NewStateSyncManager(StateSyncConfig{
@@ -527,11 +790,11 @@ func Test_Sync_Result_Correct_Root_With_Sync_Restart(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, newSyncer)
-		err = newSyncer.StartSyncing(context.Background())
-		require.NoError(t, err)
+
+		require.NoError(t, newSyncer.StartSyncing(context.Background()))
 		require.NoError(t, newSyncer.Error())
-		err = newSyncer.Wait(context.Background())
-		require.NoError(t, err)
+		require.NoError(t, newSyncer.Wait(context.Background()))
+
 		newRoot, err := db.GetMerkleRoot(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, syncRoot, newRoot)
@@ -542,7 +805,9 @@ func Test_Sync_Error_During_Sync(t *testing.T) {
 	require := require.New(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	r := rand.New(rand.NewSource(int64(0))) // #nosec G404
+	now := time.Now().UnixNano()
+	t.Logf("seed: %d", now)
+	r := rand.New(rand.NewSource(now)) // #nosec G404
 
 	dbToSync, err := generateTrie(t, r, 100)
 	require.NoError(err)
@@ -553,24 +818,23 @@ func Test_Sync_Error_During_Sync(t *testing.T) {
 	db, err := merkledb.New(
 		context.Background(),
 		memdb.New(),
-		merkledb.Config{
-			Tracer:         newNoopTracer(),
-			HistoryLength:  0,
-			ValueCacheSize: 1000,
-			NodeCacheSize:  1000,
-		},
+		newDefaultDBConfig(),
 	)
 	require.NoError(err)
 
 	client := NewMockClient(ctrl)
 	client.EXPECT().GetRangeProof(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, request *RangeProofRequest) (*merkledb.RangeProof, error) {
+		func(ctx context.Context, request *pb.SyncGetRangeProofRequest) (*merkledb.RangeProof, error) {
 			return nil, errInvalidRangeProof
 		},
 	).AnyTimes()
 	client.EXPECT().GetChangeProof(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, request *ChangeProofRequest, _ *merkledb.Database) (*merkledb.ChangeProof, error) {
-			return dbToSync.GetChangeProof(ctx, request.StartingRoot, request.EndingRoot, request.Start, request.End, int(request.Limit))
+		func(ctx context.Context, request *pb.SyncGetChangeProofRequest, _ SyncableDB) (*merkledb.ChangeProof, error) {
+			startRoot, err := ids.ToID(request.StartRootHash)
+			require.NoError(err)
+			endRoot, err := ids.ToID(request.EndRootHash)
+			require.NoError(err)
+			return dbToSync.GetChangeProof(ctx, startRoot, endRoot, request.StartKey, request.EndKey, int(request.KeyLimit))
 		},
 	).AnyTimes()
 
@@ -584,8 +848,7 @@ func Test_Sync_Error_During_Sync(t *testing.T) {
 	require.NoError(err)
 	require.NotNil(t, syncer)
 
-	err = syncer.StartSyncing(context.Background())
-	require.NoError(err)
+	require.NoError(syncer.StartSyncing(context.Background()))
 
 	err = syncer.Wait(context.Background())
 	require.ErrorIs(err, errInvalidRangeProof)
@@ -596,54 +859,18 @@ func Test_Sync_Result_Correct_Root_Update_Root_During(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	for i := 0; i < 5; i++ {
-		r := rand.New(rand.NewSource(int64(i))) // #nosec G404
+	for i := 0; i < 3; i++ {
+		now := time.Now().UnixNano()
+		t.Logf("seed: %d", now)
+		r := rand.New(rand.NewSource(now)) // #nosec G404
 
-		dbToSync, err := generateTrie(t, r, 10000)
+		dbToSync, err := generateTrie(t, r, 3*maxKeyValuesLimit)
 		require.NoError(err)
 
-		syncRoot, err := dbToSync.GetMerkleRoot(context.Background())
+		firstSyncRoot, err := dbToSync.GetMerkleRoot(context.Background())
 		require.NoError(err)
 
-		db, err := merkledb.New(
-			context.Background(),
-			memdb.New(),
-			merkledb.Config{
-				Tracer:         newNoopTracer(),
-				HistoryLength:  0,
-				ValueCacheSize: 1000,
-				NodeCacheSize:  1000,
-			},
-		)
-		require.NoError(err)
-
-		// Only let one response go through until we update the root.
-		updatedRootChan := make(chan struct{}, 1)
-		updatedRootChan <- struct{}{}
-		client := NewMockClient(ctrl)
-		client.EXPECT().GetRangeProof(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(ctx context.Context, request *RangeProofRequest) (*merkledb.RangeProof, error) {
-				<-updatedRootChan
-				return dbToSync.GetRangeProofAtRoot(ctx, request.Root, request.Start, request.End, int(request.Limit))
-			},
-		).AnyTimes()
-		client.EXPECT().GetChangeProof(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-			func(ctx context.Context, request *ChangeProofRequest, _ *merkledb.Database) (*merkledb.ChangeProof, error) {
-				<-updatedRootChan
-				return dbToSync.GetChangeProof(ctx, request.StartingRoot, request.EndingRoot, request.Start, request.End, int(request.Limit))
-			},
-		).AnyTimes()
-
-		syncer, err := NewStateSyncManager(StateSyncConfig{
-			SyncDB:                db,
-			Client:                client,
-			TargetRoot:            syncRoot,
-			SimultaneousWorkLimit: 5,
-			Log:                   logging.NoLog{},
-		})
-		require.NoError(err)
-		require.NotNil(t, syncer)
-		for x := 0; x < 50; x++ {
+		for x := 0; x < 100; x++ {
 			key := make([]byte, r.Intn(50))
 			_, err = r.Read(key)
 			require.NoError(err)
@@ -652,8 +879,7 @@ func Test_Sync_Result_Correct_Root_Update_Root_During(t *testing.T) {
 			_, err = r.Read(val)
 			require.NoError(err)
 
-			err = dbToSync.Put(key, val)
-			require.NoError(err)
+			require.NoError(dbToSync.Put(key, val))
 
 			deleteKeyStart := make([]byte, r.Intn(50))
 			_, err = r.Read(deleteKeyStart)
@@ -661,18 +887,57 @@ func Test_Sync_Result_Correct_Root_Update_Root_During(t *testing.T) {
 
 			it := dbToSync.NewIteratorWithStart(deleteKeyStart)
 			if it.Next() {
-				err = dbToSync.Delete(it.Key())
-				require.NoError(err)
+				require.NoError(dbToSync.Delete(it.Key()))
 			}
 			require.NoError(it.Error())
 			it.Release()
 		}
 
-		syncRoot, err = dbToSync.GetMerkleRoot(context.Background())
+		secondSyncRoot, err := dbToSync.GetMerkleRoot(context.Background())
 		require.NoError(err)
 
-		err = syncer.StartSyncing(context.Background())
+		db, err := merkledb.New(
+			context.Background(),
+			memdb.New(),
+			newDefaultDBConfig(),
+		)
 		require.NoError(err)
+
+		// Only let one response go through until we update the root.
+		updatedRootChan := make(chan struct{}, 1)
+		updatedRootChan <- struct{}{}
+
+		client := NewMockClient(ctrl)
+		client.EXPECT().GetRangeProof(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, request *pb.SyncGetRangeProofRequest) (*merkledb.RangeProof, error) {
+				<-updatedRootChan
+				root, err := ids.ToID(request.RootHash)
+				require.NoError(err)
+				return dbToSync.GetRangeProofAtRoot(ctx, root, request.StartKey, request.EndKey, int(request.KeyLimit))
+			},
+		).AnyTimes()
+		client.EXPECT().GetChangeProof(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, request *pb.SyncGetChangeProofRequest, _ SyncableDB) (*merkledb.ChangeProof, error) {
+				<-updatedRootChan
+				startRoot, err := ids.ToID(request.StartRootHash)
+				require.NoError(err)
+				endRoot, err := ids.ToID(request.EndRootHash)
+				require.NoError(err)
+				return dbToSync.GetChangeProof(ctx, startRoot, endRoot, request.StartKey, request.EndKey, int(request.KeyLimit))
+			},
+		).AnyTimes()
+
+		syncer, err := NewStateSyncManager(StateSyncConfig{
+			SyncDB:                db,
+			Client:                client,
+			TargetRoot:            firstSyncRoot,
+			SimultaneousWorkLimit: 5,
+			Log:                   logging.NoLog{},
+		})
+		require.NoError(err)
+		require.NotNil(t, syncer)
+
+		require.NoError(syncer.StartSyncing(context.Background()))
 
 		// Wait until we've processed some work
 		// before updating the sync target.
@@ -683,20 +948,18 @@ func Test_Sync_Result_Correct_Root_Update_Root_During(t *testing.T) {
 
 				return syncer.processedWork.Len() > 0
 			},
-			3*time.Second,
+			5*time.Second,
 			10*time.Millisecond,
 		)
-		err = syncer.UpdateSyncTarget(syncRoot)
-		require.NoError(err)
+		require.NoError(syncer.UpdateSyncTarget(secondSyncRoot))
 		close(updatedRootChan)
 
-		err = syncer.Wait(context.Background())
-		require.NoError(err)
+		require.NoError(syncer.Wait(context.Background()))
 		require.NoError(syncer.Error())
 
 		newRoot, err := db.GetMerkleRoot(context.Background())
 		require.NoError(err)
-		require.Equal(syncRoot, newRoot)
+		require.Equal(secondSyncRoot, newRoot)
 	}
 }
 
@@ -706,8 +969,8 @@ func Test_Sync_UpdateSyncTarget(t *testing.T) {
 	defer ctrl.Finish()
 
 	m, err := NewStateSyncManager(StateSyncConfig{
-		SyncDB:                &merkledb.Database{}, // Not used
-		Client:                NewMockClient(ctrl),  // Not used
+		SyncDB:                merkledb.NewMockMerkleDB(ctrl), // Not used
+		Client:                NewMockClient(ctrl),            // Not used
 		TargetRoot:            ids.Empty,
 		SimultaneousWorkLimit: 5,
 		Log:                   logging.NoLog{},
@@ -738,30 +1001,24 @@ func Test_Sync_UpdateSyncTarget(t *testing.T) {
 
 	<-startedWaiting
 	newSyncRoot := ids.GenerateTestID()
-	err = m.UpdateSyncTarget(newSyncRoot)
-	require.NoError(err)
+	require.NoError(m.UpdateSyncTarget(newSyncRoot))
 	<-gotSignalChan
 
 	require.Equal(newSyncRoot, m.config.TargetRoot)
-	require.Equal(0, m.processedWork.Len())
+	require.Zero(m.processedWork.Len())
 	require.Equal(1, m.unprocessedWork.Len())
 }
 
-func generateTrie(t *testing.T, r *rand.Rand, count int) (*merkledb.Database, error) {
+func generateTrie(t *testing.T, r *rand.Rand, count int) (merkledb.MerkleDB, error) {
 	db, _, err := generateTrieWithMinKeyLen(t, r, count, 0)
 	return db, err
 }
 
-func generateTrieWithMinKeyLen(t *testing.T, r *rand.Rand, count int, minKeyLen int) (*merkledb.Database, [][]byte, error) {
+func generateTrieWithMinKeyLen(t *testing.T, r *rand.Rand, count int, minKeyLen int) (merkledb.MerkleDB, [][]byte, error) {
 	db, err := merkledb.New(
 		context.Background(),
 		memdb.New(),
-		merkledb.Config{
-			Tracer:         newNoopTracer(),
-			HistoryLength:  1000,
-			ValueCacheSize: 1000,
-			NodeCacheSize:  1000,
-		},
+		newDefaultDBConfig(),
 	)
 	if err != nil {
 		return nil, nil, err

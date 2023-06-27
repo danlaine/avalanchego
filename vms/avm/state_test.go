@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package avm
@@ -13,6 +13,7 @@ import (
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/choices"
 	"github.com/ava-labs/avalanchego/snow/engine/common"
+	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/secp256k1"
 	"github.com/ava-labs/avalanchego/utils/units"
 	"github.com/ava-labs/avalanchego/vms/avm/txs"
@@ -28,7 +29,7 @@ func TestSetsAndGets(t *testing.T) {
 			Fx: &FxTest{
 				InitializeF: func(vmIntf interface{}) error {
 					vm := vmIntf.(secp256k1fx.VM)
-					return vm.CodecRegistry().RegisterType(&avax.TestVerifiable{})
+					return vm.CodecRegistry().RegisterType(&avax.TestState{})
 				},
 			},
 		}},
@@ -50,12 +51,12 @@ func TestSetsAndGets(t *testing.T) {
 			OutputIndex: 1,
 		},
 		Asset: avax.Asset{ID: ids.Empty},
-		Out:   &avax.TestVerifiable{},
+		Out:   &avax.TestState{},
 	}
 	utxoID := utxo.InputID()
 
 	tx := &txs.Tx{Unsigned: &txs.BaseTx{BaseTx: avax.BaseTx{
-		NetworkID:    networkID,
+		NetworkID:    constants.UnitTestID,
 		BlockchainID: chainID,
 		Ins: []*avax.TransferableInput{{
 			UTXOID: avax.UTXOID{
@@ -115,7 +116,7 @@ func TestFundingNoAddresses(t *testing.T) {
 			Fx: &FxTest{
 				InitializeF: func(vmIntf interface{}) error {
 					vm := vmIntf.(secp256k1fx.VM)
-					return vm.CodecRegistry().RegisterType(&avax.TestVerifiable{})
+					return vm.CodecRegistry().RegisterType(&avax.TestState{})
 				},
 			},
 		}},
@@ -137,7 +138,7 @@ func TestFundingNoAddresses(t *testing.T) {
 			OutputIndex: 1,
 		},
 		Asset: avax.Asset{ID: ids.Empty},
-		Out:   &avax.TestVerifiable{},
+		Out:   &avax.TestState{},
 	}
 
 	state.AddUTXO(utxo)

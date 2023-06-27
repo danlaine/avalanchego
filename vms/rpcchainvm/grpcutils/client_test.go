@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package grpcutils
@@ -61,8 +61,7 @@ func TestWaitForReady(t *testing.T) {
 
 	db := rpcdb.NewClient(pb.NewDatabaseClient(conn))
 
-	err = db.Put([]byte("foo"), []byte("bar"))
-	require.NoError(err)
+	require.NoError(db.Put([]byte("foo"), []byte("bar")))
 
 	noWaitListener, err := NewListener()
 	require.NoError(err)

@@ -1,11 +1,10 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
 
 import (
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 
@@ -19,12 +18,12 @@ import (
 	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/logging"
 	"github.com/ava-labs/avalanchego/utils/timer/mockable"
-	"github.com/ava-labs/avalanchego/utils/window"
 	"github.com/ava-labs/avalanchego/vms/components/verify"
 	"github.com/ava-labs/avalanchego/vms/platformvm/blocks"
 	"github.com/ava-labs/avalanchego/vms/platformvm/metrics"
 	"github.com/ava-labs/avalanchego/vms/platformvm/state"
 	"github.com/ava-labs/avalanchego/vms/platformvm/txs"
+	"github.com/ava-labs/avalanchego/vms/platformvm/validators"
 	"github.com/ava-labs/avalanchego/vms/secp256k1fx"
 )
 
@@ -61,12 +60,11 @@ func TestAcceptorVisitProposalBlock(t *testing.T) {
 			},
 			state: s,
 		},
-		metrics:          metrics.Noop,
-		recentlyAccepted: nil,
+		metrics:    metrics.Noop,
+		validators: validators.TestManager,
 	}
 
-	err = acceptor.ApricotProposalBlock(blk)
-	require.NoError(err)
+	require.NoError(acceptor.ApricotProposalBlock(blk))
 
 	require.Equal(blkID, acceptor.backend.lastAccepted)
 
@@ -98,12 +96,8 @@ func TestAcceptorVisitAtomicBlock(t *testing.T) {
 				SharedMemory: sharedMemory,
 			},
 		},
-		metrics: metrics.Noop,
-		recentlyAccepted: window.New[ids.ID](window.Config{
-			Clock:   &mockable.Clock{},
-			MaxSize: 1,
-			TTL:     time.Hour,
-		}),
+		metrics:    metrics.Noop,
+		validators: validators.TestManager,
 	}
 
 	blk, err := blocks.NewApricotAtomicBlock(
@@ -126,7 +120,7 @@ func TestAcceptorVisitAtomicBlock(t *testing.T) {
 	s.EXPECT().AddStatelessBlock(blk, choices.Accepted).Times(1)
 
 	err = acceptor.ApricotAtomicBlock(blk)
-	require.Error(err, "should fail because the block isn't in the state map")
+	require.ErrorIs(err, errMissingBlockState)
 
 	// Set [blk]'s state in the map as though it had been verified.
 	onAcceptState := state.NewMockDiff(ctrl)
@@ -159,8 +153,7 @@ func TestAcceptorVisitAtomicBlock(t *testing.T) {
 	onAcceptState.EXPECT().Apply(s).Times(1)
 	sharedMemory.EXPECT().Apply(atomicRequests, batch).Return(nil).Times(1)
 
-	err = acceptor.ApricotAtomicBlock(blk)
-	require.NoError(err)
+	require.NoError(acceptor.ApricotAtomicBlock(blk))
 }
 
 func TestAcceptorVisitStandardBlock(t *testing.T) {
@@ -183,12 +176,8 @@ func TestAcceptorVisitStandardBlock(t *testing.T) {
 				SharedMemory: sharedMemory,
 			},
 		},
-		metrics: metrics.Noop,
-		recentlyAccepted: window.New[ids.ID](window.Config{
-			Clock:   clk,
-			MaxSize: 1,
-			TTL:     time.Hour,
-		}),
+		metrics:    metrics.Noop,
+		validators: validators.TestManager,
 	}
 
 	blk, err := blocks.NewBanffStandardBlock(
@@ -214,7 +203,7 @@ func TestAcceptorVisitStandardBlock(t *testing.T) {
 	s.EXPECT().AddStatelessBlock(blk, choices.Accepted).Times(1)
 
 	err = acceptor.BanffStandardBlock(blk)
-	require.Error(err, "should fail because the block isn't in the state map")
+	require.ErrorIs(err, errMissingBlockState)
 
 	// Set [blk]'s state in the map as though it had been verified.
 	onAcceptState := state.NewMockDiff(ctrl)
@@ -253,8 +242,7 @@ func TestAcceptorVisitStandardBlock(t *testing.T) {
 	onAcceptState.EXPECT().Apply(s).Times(1)
 	sharedMemory.EXPECT().Apply(atomicRequests, batch).Return(nil).Times(1)
 
-	err = acceptor.BanffStandardBlock(blk)
-	require.NoError(err)
+	require.NoError(acceptor.BanffStandardBlock(blk))
 	require.True(calledOnAcceptFunc)
 	require.Equal(blk.ID(), acceptor.backend.lastAccepted)
 }
@@ -278,40 +266,17 @@ func TestAcceptorVisitCommitBlock(t *testing.T) {
 				SharedMemory: sharedMemory,
 			},
 		},
-		metrics: metrics.Noop,
-		recentlyAccepted: window.New[ids.ID](window.Config{
-			Clock:   &mockable.Clock{},
-			MaxSize: 1,
-			TTL:     time.Hour,
-		}),
+		metrics:      metrics.Noop,
+		validators:   validators.TestManager,
 		bootstrapped: &utils.Atomic[bool]{},
 	}
 
 	blk, err := blocks.NewApricotCommitBlock(parentID, 1 /*height*/)
 	require.NoError(err)
 
-	blkID := blk.ID()
 	err = acceptor.ApricotCommitBlock(blk)
-	require.Error(err, "should fail because the block isn't in the state map")
+	require.ErrorIs(err, state.ErrMissingParentState)
 
-	// Set [blk]'s state in the map as though it had been verified.
-	onAcceptState := state.NewMockDiff(ctrl)
-	childID := ids.GenerateTestID()
-	acceptor.backend.blkIDToState[blkID] = &blockState{
-		onAcceptState: onAcceptState,
-	}
-	// Give [blk] a child.
-	childOnAcceptState := state.NewMockDiff(ctrl)
-	childOnAbortState := state.NewMockDiff(ctrl)
-	childOnCommitState := state.NewMockDiff(ctrl)
-	childState := &blockState{
-		onAcceptState: childOnAcceptState,
-		proposalBlockState: proposalBlockState{
-			onAbortState:  childOnAbortState,
-			onCommitState: childOnCommitState,
-		},
-	}
-	acceptor.backend.blkIDToState[childID] = childState
 	// Set [blk]'s parent in the state map.
 	parentOnAcceptState := state.NewMockDiff(ctrl)
 	parentOnAbortState := state.NewMockDiff(ctrl)
@@ -326,6 +291,31 @@ func TestAcceptorVisitCommitBlock(t *testing.T) {
 		},
 	}
 	acceptor.backend.blkIDToState[parentID] = parentState
+
+	blkID := blk.ID()
+	// Set expected calls on dependencies.
+	// Make sure the parent is accepted first.
+	gomock.InOrder(
+		parentStatelessBlk.EXPECT().ID().Return(parentID).Times(2),
+		s.EXPECT().SetLastAccepted(parentID).Times(1),
+		parentStatelessBlk.EXPECT().Height().Return(blk.Height()-1).Times(1),
+		s.EXPECT().SetHeight(blk.Height()-1).Times(1),
+		s.EXPECT().AddStatelessBlock(parentState.statelessBlock, choices.Accepted).Times(1),
+
+		s.EXPECT().SetLastAccepted(blkID).Times(1),
+		s.EXPECT().SetHeight(blk.Height()).Times(1),
+		s.EXPECT().AddStatelessBlock(blk, choices.Accepted).Times(1),
+	)
+
+	err = acceptor.ApricotCommitBlock(blk)
+	require.ErrorIs(err, errMissingBlockState)
+
+	// Set [blk]'s state in the map as though it had been verified.
+	acceptor.backend.blkIDToState[parentID] = parentState
+	onAcceptState := state.NewMockDiff(ctrl)
+	acceptor.backend.blkIDToState[blkID] = &blockState{
+		onAcceptState: onAcceptState,
+	}
 
 	// Set expected calls on dependencies.
 	// Make sure the parent is accepted first.
@@ -344,8 +334,7 @@ func TestAcceptorVisitCommitBlock(t *testing.T) {
 		s.EXPECT().Commit().Return(nil).Times(1),
 	)
 
-	err = acceptor.ApricotCommitBlock(blk)
-	require.NoError(err)
+	require.NoError(acceptor.ApricotCommitBlock(blk))
 	require.Equal(blk.ID(), acceptor.backend.lastAccepted)
 }
 
@@ -368,40 +357,17 @@ func TestAcceptorVisitAbortBlock(t *testing.T) {
 				SharedMemory: sharedMemory,
 			},
 		},
-		metrics: metrics.Noop,
-		recentlyAccepted: window.New[ids.ID](window.Config{
-			Clock:   &mockable.Clock{},
-			MaxSize: 1,
-			TTL:     time.Hour,
-		}),
+		metrics:      metrics.Noop,
+		validators:   validators.TestManager,
 		bootstrapped: &utils.Atomic[bool]{},
 	}
 
 	blk, err := blocks.NewApricotAbortBlock(parentID, 1 /*height*/)
 	require.NoError(err)
 
-	blkID := blk.ID()
 	err = acceptor.ApricotAbortBlock(blk)
-	require.Error(err, "should fail because the block isn't in the state map")
+	require.ErrorIs(err, state.ErrMissingParentState)
 
-	// Set [blk]'s state in the map as though it had been verified.
-	onAcceptState := state.NewMockDiff(ctrl)
-	childID := ids.GenerateTestID()
-	acceptor.backend.blkIDToState[blkID] = &blockState{
-		onAcceptState: onAcceptState,
-	}
-	// Give [blk] a child.
-	childOnAcceptState := state.NewMockDiff(ctrl)
-	childOnAbortState := state.NewMockDiff(ctrl)
-	childOnCommitState := state.NewMockDiff(ctrl)
-	childState := &blockState{
-		onAcceptState: childOnAcceptState,
-		proposalBlockState: proposalBlockState{
-			onAbortState:  childOnAbortState,
-			onCommitState: childOnCommitState,
-		},
-	}
-	acceptor.backend.blkIDToState[childID] = childState
 	// Set [blk]'s parent in the state map.
 	parentOnAcceptState := state.NewMockDiff(ctrl)
 	parentOnAbortState := state.NewMockDiff(ctrl)
@@ -416,6 +382,32 @@ func TestAcceptorVisitAbortBlock(t *testing.T) {
 		},
 	}
 	acceptor.backend.blkIDToState[parentID] = parentState
+
+	blkID := blk.ID()
+	// Set expected calls on dependencies.
+	// Make sure the parent is accepted first.
+	gomock.InOrder(
+		parentStatelessBlk.EXPECT().ID().Return(parentID).Times(2),
+		s.EXPECT().SetLastAccepted(parentID).Times(1),
+		parentStatelessBlk.EXPECT().Height().Return(blk.Height()-1).Times(1),
+		s.EXPECT().SetHeight(blk.Height()-1).Times(1),
+		s.EXPECT().AddStatelessBlock(parentState.statelessBlock, choices.Accepted).Times(1),
+
+		s.EXPECT().SetLastAccepted(blkID).Times(1),
+		s.EXPECT().SetHeight(blk.Height()).Times(1),
+		s.EXPECT().AddStatelessBlock(blk, choices.Accepted).Times(1),
+	)
+
+	err = acceptor.ApricotAbortBlock(blk)
+	require.ErrorIs(err, errMissingBlockState)
+
+	// Set [blk]'s state in the map as though it had been verified.
+	acceptor.backend.blkIDToState[parentID] = parentState
+
+	onAcceptState := state.NewMockDiff(ctrl)
+	acceptor.backend.blkIDToState[blkID] = &blockState{
+		onAcceptState: onAcceptState,
+	}
 
 	// Set expected calls on dependencies.
 	// Make sure the parent is accepted first.
@@ -434,7 +426,6 @@ func TestAcceptorVisitAbortBlock(t *testing.T) {
 		s.EXPECT().Commit().Return(nil).Times(1),
 	)
 
-	err = acceptor.ApricotAbortBlock(blk)
-	require.NoError(err)
+	require.NoError(acceptor.ApricotAbortBlock(blk))
 	require.Equal(blk.ID(), acceptor.backend.lastAccepted)
 }

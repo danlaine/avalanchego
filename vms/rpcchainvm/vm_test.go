@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package rpcchainvm
@@ -181,8 +181,7 @@ func TestRuntimeSubprocessBootstrap(t *testing.T) {
 			listener, err := grpcutils.NewListener()
 			require.NoError(err)
 
-			err = os.Setenv(runtime.EngineAddressKey, listener.Addr().String())
-			require.NoError(err)
+			require.NoError(os.Setenv(runtime.EngineAddressKey, listener.Addr().String()))
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()

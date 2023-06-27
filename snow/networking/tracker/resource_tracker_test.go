@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package tracker
@@ -27,8 +27,8 @@ func TestNewCPUTracker(t *testing.T) {
 
 	trackerIntf, err := NewResourceTracker(reg, resource.NoUsage, factory, halflife)
 	require.NoError(err)
-	tracker, ok := trackerIntf.(*resourceTracker)
-	require.True(ok)
+	require.IsType(&resourceTracker{}, trackerIntf)
+	tracker := trackerIntf.(*resourceTracker)
 	require.Equal(factory, tracker.factory)
 	require.NotNil(tracker.processingMeter)
 	require.Equal(halflife, tracker.halflife)

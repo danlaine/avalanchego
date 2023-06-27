@@ -1,10 +1,11 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package builder
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -30,6 +31,8 @@ import (
 	txexecutor "github.com/ava-labs/avalanchego/vms/platformvm/txs/executor"
 )
 
+var errTestingDropped = errors.New("testing dropped")
+
 // shows that a locally generated CreateChainTx can be added to mempool and then
 // removed by inclusion in a block
 func TestBlockBuilderAddLocalTx(t *testing.T) {
@@ -48,8 +51,7 @@ func TestBlockBuilderAddLocalTx(t *testing.T) {
 	env.sender.SendAppGossipF = func(context.Context, []byte) error {
 		return nil
 	}
-	err := env.Builder.AddUnverifiedTx(tx)
-	require.NoError(err)
+	require.NoError(env.Builder.AddUnverifiedTx(tx))
 
 	has := env.mempool.Has(txID)
 	require.True(has)
@@ -58,8 +60,8 @@ func TestBlockBuilderAddLocalTx(t *testing.T) {
 	blkIntf, err := env.Builder.BuildBlock(context.Background())
 	require.NoError(err)
 
-	blk, ok := blkIntf.(*blockexecutor.Block)
-	require.True(ok)
+	require.IsType(&blockexecutor.Block{}, blkIntf)
+	blk := blkIntf.(*blockexecutor.Block)
 	require.Len(blk.Txs(), 1)
 	require.Equal(txID, blk.Txs()[0].ID())
 
@@ -83,14 +85,14 @@ func TestPreviouslyDroppedTxsCanBeReAddedToMempool(t *testing.T) {
 	// A tx simply added to mempool is obviously not marked as dropped
 	require.NoError(env.mempool.Add(tx))
 	require.True(env.mempool.Has(txID))
-	_, isDropped := env.mempool.GetDropReason(txID)
-	require.False(isDropped)
+	reason := env.mempool.GetDropReason(txID)
+	require.NoError(reason)
 
 	// When a tx is marked as dropped, it is still available to allow re-issuance
-	env.mempool.MarkDropped(txID, "dropped for testing")
+	env.mempool.MarkDropped(txID, errTestingDropped)
 	require.True(env.mempool.Has(txID)) // still available
-	_, isDropped = env.mempool.GetDropReason(txID)
-	require.True(isDropped)
+	reason = env.mempool.GetDropReason(txID)
+	require.ErrorIs(reason, errTestingDropped)
 
 	// A previously dropped tx, popped then re-added to mempool,
 	// is not dropped anymore
@@ -98,8 +100,8 @@ func TestPreviouslyDroppedTxsCanBeReAddedToMempool(t *testing.T) {
 	require.NoError(env.mempool.Add(tx))
 
 	require.True(env.mempool.Has(txID))
-	_, isDropped = env.mempool.GetDropReason(txID)
-	require.False(isDropped)
+	reason = env.mempool.GetDropReason(txID)
+	require.NoError(reason)
 }
 
 func TestNoErrorOnUnexpectedSetPreferenceDuringBootstrapping(t *testing.T) {
@@ -135,7 +137,7 @@ func TestGetNextStakerToReward(t *testing.T) {
 			stateF: func(ctrl *gomock.Controller) state.Chain {
 				return state.NewMockChain(ctrl)
 			},
-			expectedErr: errEndOfTime,
+			expectedErr: ErrEndOfTime,
 		},
 		{
 			name:      "no stakers",
@@ -286,11 +288,10 @@ func TestGetNextStakerToReward(t *testing.T) {
 
 			state := tt.stateF(ctrl)
 			txID, shouldReward, err := getNextStakerToReward(tt.timestamp, state)
+			require.ErrorIs(err, tt.expectedErr)
 			if tt.expectedErr != nil {
-				require.Equal(tt.expectedErr, err)
 				return
 			}
-			require.NoError(err)
 			require.Equal(tt.expectedTxID, txID)
 			require.Equal(tt.expectedShouldReward, shouldReward)
 		})
@@ -491,7 +492,7 @@ func TestBuildBlock(t *testing.T) {
 			expectedBlkF: func(*require.Assertions) blocks.Block {
 				return nil
 			},
-			expectedErr: errNoPendingBlocks,
+			expectedErr: ErrNoPendingBlocks,
 		},
 		{
 			name: "should advance time",
@@ -676,7 +677,7 @@ func TestBuildBlock(t *testing.T) {
 				return
 			}
 			require.NoError(err)
-			require.EqualValues(tt.expectedBlkF(require), gotBlk)
+			require.Equal(tt.expectedBlkF(require), gotBlk)
 		})
 	}
 }

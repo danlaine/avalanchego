@@ -1,32 +1,36 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
 
 import (
+	"errors"
 	"fmt"
 
 	"go.uber.org/zap"
 
-	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow/choices"
 	"github.com/ava-labs/avalanchego/utils"
-	"github.com/ava-labs/avalanchego/utils/window"
 	"github.com/ava-labs/avalanchego/vms/platformvm/blocks"
 	"github.com/ava-labs/avalanchego/vms/platformvm/metrics"
 	"github.com/ava-labs/avalanchego/vms/platformvm/state"
+	"github.com/ava-labs/avalanchego/vms/platformvm/validators"
 )
 
-var _ blocks.Visitor = (*acceptor)(nil)
+var (
+	_ blocks.Visitor = (*acceptor)(nil)
+
+	errMissingBlockState = errors.New("missing state of block")
+)
 
 // acceptor handles the logic for accepting a block.
 // All errors returned by this struct are fatal and should result in the chain
 // being shutdown.
 type acceptor struct {
 	*backend
-	metrics          metrics.Metrics
-	recentlyAccepted window.Window[ids.ID]
-	bootstrapped     *utils.Atomic[bool]
+	metrics      metrics.Metrics
+	validators   validators.Manager
+	bootstrapped *utils.Atomic[bool]
 }
 
 func (a *acceptor) BanffAbortBlock(b *blocks.BanffAbortBlock) error {
@@ -145,11 +149,13 @@ func (a *acceptor) ApricotAtomicBlock(b *blocks.ApricotAtomicBlock) error {
 
 	blkState, ok := a.blkIDToState[blkID]
 	if !ok {
-		return fmt.Errorf("couldn't find state of block %s", blkID)
+		return fmt.Errorf("%w %s", errMissingBlockState, blkID)
 	}
 
 	// Update the state to reflect the changes made in [onAcceptState].
-	blkState.onAcceptState.Apply(a.state)
+	if err := blkState.onAcceptState.Apply(a.state); err != nil {
+		return err
+	}
 
 	defer a.state.Abort()
 	batch, err := a.state.CommitBatch()
@@ -231,9 +237,11 @@ func (a *acceptor) optionBlock(b, parent blocks.Block) error {
 
 	blkState, ok := a.blkIDToState[blkID]
 	if !ok {
-		return fmt.Errorf("couldn't find state of block %s", blkID)
+		return fmt.Errorf("%w %s", errMissingBlockState, blkID)
 	}
-	blkState.onAcceptState.Apply(a.state)
+	if err := blkState.onAcceptState.Apply(a.state); err != nil {
+		return err
+	}
 	return a.state.Commit()
 }
 
@@ -267,11 +275,13 @@ func (a *acceptor) standardBlock(b blocks.Block) error {
 
 	blkState, ok := a.blkIDToState[blkID]
 	if !ok {
-		return fmt.Errorf("couldn't find state of block %s", blkID)
+		return fmt.Errorf("%w %s", errMissingBlockState, blkID)
 	}
 
 	// Update the state to reflect the changes made in [onAcceptState].
-	blkState.onAcceptState.Apply(a.state)
+	if err := blkState.onAcceptState.Apply(a.state); err != nil {
+		return err
+	}
 
 	defer a.state.Abort()
 	batch, err := a.state.CommitBatch()
@@ -305,6 +315,6 @@ func (a *acceptor) commonAccept(b blocks.Block) error {
 	a.state.SetLastAccepted(blkID)
 	a.state.SetHeight(b.Height())
 	a.state.AddStatelessBlock(b, choices.Accepted)
-	a.recentlyAccepted.Add(blkID)
+	a.validators.OnAcceptedBlockID(blkID)
 	return nil
 }

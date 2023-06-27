@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package syncer
@@ -89,9 +89,9 @@ func buildTestsObjects(t *testing.T, commonCfg *common.Config) (
 	commonSyncer := New(cfg, func(context.Context, uint32) error {
 		return nil
 	})
-	syncer, ok := commonSyncer.(*stateSyncer)
-	require.True(t, ok)
-	require.True(t, syncer.stateSyncVM != nil)
+	require.IsType(t, &stateSyncer{}, commonSyncer)
+	syncer := commonSyncer.(*stateSyncer)
+	require.NotNil(t, syncer.stateSyncVM)
 
 	fullVM.GetOngoingSyncStateSummaryF = func(context.Context) (block.StateSummary, error) {
 		return nil, database.ErrNotFound

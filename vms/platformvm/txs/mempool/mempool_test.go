@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package mempool
@@ -79,7 +79,7 @@ func TestDecisionTxsInMempool(t *testing.T) {
 		require.True(mpool.Has(tx.ID()))
 
 		retrieved := mpool.Get(tx.ID())
-		require.True(retrieved != nil)
+		require.NotNil(retrieved)
 		require.Equal(tx, retrieved)
 
 		// we can peek it
@@ -134,13 +134,13 @@ func TestProposalTxsInMempool(t *testing.T) {
 		require.True(mpool.Has(tx.ID()))
 
 		retrieved := mpool.Get(tx.ID())
-		require.True(retrieved != nil)
+		require.NotNil(retrieved)
 		require.Equal(tx, retrieved)
 
 		{
 			// we can peek it
 			peeked := mpool.PeekStakerTx()
-			require.True(peeked != nil)
+			require.NotNil(peeked)
 			require.Equal(tx, peeked)
 		}
 

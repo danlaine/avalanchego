@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package sampler
@@ -14,8 +14,7 @@ func TestWeightedHeapInitialize(t *testing.T) {
 
 	h := weightedHeap{}
 
-	err := h.Initialize([]uint64{2, 2, 1, 3, 3, 1, 3})
-	require.NoError(err)
+	require.NoError(h.Initialize([]uint64{2, 2, 1, 3, 3, 1, 3}))
 
 	expectedOrdering := []int{3, 4, 6, 0, 1, 2, 5}
 	for i, elem := range h.heap {

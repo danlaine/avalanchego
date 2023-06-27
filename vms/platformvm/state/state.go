@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package state
@@ -23,10 +23,12 @@ import (
 	"github.com/ava-labs/avalanchego/snow/choices"
 	"github.com/ava-labs/avalanchego/snow/uptime"
 	"github.com/ava-labs/avalanchego/snow/validators"
+	"github.com/ava-labs/avalanchego/utils"
 	"github.com/ava-labs/avalanchego/utils/constants"
 	"github.com/ava-labs/avalanchego/utils/crypto/bls"
 	"github.com/ava-labs/avalanchego/utils/hashing"
 	"github.com/ava-labs/avalanchego/utils/math"
+	"github.com/ava-labs/avalanchego/utils/units"
 	"github.com/ava-labs/avalanchego/utils/wrappers"
 	"github.com/ava-labs/avalanchego/vms/components/avax"
 	"github.com/ava-labs/avalanchego/vms/platformvm/blocks"
@@ -39,16 +41,20 @@ import (
 )
 
 const (
+	blockCacheSize               = 64 * units.MiB
+	txCacheSize                  = 128 * units.MiB
+	transformedSubnetTxCacheSize = 4 * units.MiB
+
 	validatorDiffsCacheSize = 2048
-	blockCacheSize          = 2048
-	txCacheSize             = 2048
 	rewardUTXOsCacheSize    = 2048
 	chainCacheSize          = 2048
 	chainDBCacheSize        = 2048
 )
 
 var (
-	_ State = (*state)(nil)
+	_ State              = (*state)(nil)
+	_ cache.SizedElement = (*stateBlk)(nil)
+	_ cache.SizedElement = (*txAndStatus)(nil)
 
 	ErrDelegatorSubset              = errors.New("delegator's time range must be a subset of the validator's time range")
 	errMissingValidatorSet          = errors.New("missing validator set")
@@ -152,19 +158,26 @@ type stateBlk struct {
 	Status choices.Status `serialize:"true"`
 }
 
+func (b *stateBlk) Size() int {
+	if b == nil {
+		return wrappers.LongLen
+	}
+	return len(b.Bytes) + wrappers.IntLen + wrappers.LongLen
+}
+
 /*
  * VMDB
  * |-. validators
  * | |-. current
  * | | |-. validator
  * | | | '-. list
- * | | |   '-- txID -> uptime + potential reward
+ * | | |   '-- txID -> uptime + potential reward + potential delegatee reward
  * | | |-. delegator
  * | | | '-. list
  * | | |   '-- txID -> potential reward
  * | | |-. subnetValidator
  * | | | '-. list
- * | | |   '-- txID -> uptime + potential reward or potential reward or nil
+ * | | |   '-- txID -> uptime + potential reward + potential delegatee reward
  * | | '-. subnetDelegator
  * | |   '-. list
  * | |     '-- txID -> potential reward
@@ -213,12 +226,13 @@ type stateBlk struct {
  *   '-- lastAcceptedKey -> lastAccepted
  */
 type state struct {
-	validatorUptimes
+	validatorState
 
-	cfg     *config.Config
-	ctx     *snow.Context
-	metrics metrics.Metrics
-	rewards reward.Calculator
+	cfg          *config.Config
+	ctx          *snow.Context
+	metrics      metrics.Metrics
+	rewards      reward.Calculator
+	bootstrapped *utils.Atomic[bool]
 
 	baseDB *versiondb.Database
 
@@ -333,6 +347,13 @@ type txAndStatus struct {
 	status status.Status
 }
 
+func (t *txAndStatus) Size() int {
+	if t == nil {
+		return wrappers.LongLen
+	}
+	return t.tx.Size() + wrappers.IntLen + wrappers.LongLen
+}
+
 func New(
 	db database.Database,
 	genesisBytes []byte,
@@ -341,6 +362,7 @@ func New(
 	ctx *snow.Context,
 	metrics metrics.Metrics,
 	rewards reward.Calculator,
+	bootstrapped *utils.Atomic[bool],
 ) (State, error) {
 	s, err := new(
 		db,
@@ -349,6 +371,7 @@ func New(
 		ctx,
 		metricsReg,
 		rewards,
+		bootstrapped,
 	)
 	if err != nil {
 		return nil, err
@@ -371,11 +394,12 @@ func new(
 	ctx *snow.Context,
 	metricsReg prometheus.Registerer,
 	rewards reward.Calculator,
+	bootstrapped *utils.Atomic[bool],
 ) (*state, error) {
-	blockCache, err := metercacher.New[ids.ID, *stateBlk](
+	blockCache, err := metercacher.New(
 		"block_cache",
 		metricsReg,
-		&cache.LRU[ids.ID, *stateBlk]{Size: blockCacheSize},
+		cache.NewSizedLRU[ids.ID, *stateBlk](blockCacheSize),
 	)
 	if err != nil {
 		return nil, err
@@ -417,10 +441,10 @@ func new(
 		return nil, err
 	}
 
-	txCache, err := metercacher.New[ids.ID, *txAndStatus](
+	txCache, err := metercacher.New(
 		"tx_cache",
 		metricsReg,
-		&cache.LRU[ids.ID, *txAndStatus]{Size: txCacheSize},
+		cache.NewSizedLRU[ids.ID, *txAndStatus](txCacheSize),
 	)
 	if err != nil {
 		return nil, err
@@ -444,10 +468,10 @@ func new(
 
 	subnetBaseDB := prefixdb.New(subnetPrefix, baseDB)
 
-	transformedSubnetCache, err := metercacher.New[ids.ID, *txs.Tx](
+	transformedSubnetCache, err := metercacher.New(
 		"transformed_subnet_cache",
 		metricsReg,
-		&cache.LRU[ids.ID, *txs.Tx]{Size: chainCacheSize},
+		cache.NewSizedLRU[ids.ID, *txs.Tx](transformedSubnetTxCacheSize),
 	)
 	if err != nil {
 		return nil, err
@@ -481,13 +505,14 @@ func new(
 	}
 
 	return &state{
-		validatorUptimes: newValidatorUptimes(),
+		validatorState: newValidatorState(),
 
-		cfg:     cfg,
-		ctx:     ctx,
-		metrics: metrics,
-		rewards: rewards,
-		baseDB:  baseDB,
+		cfg:          cfg,
+		ctx:          ctx,
+		metrics:      metrics,
+		rewards:      rewards,
+		bootstrapped: bootstrapped,
+		baseDB:       baseDB,
 
 		addedBlocks: make(map[ids.ID]stateBlk),
 		blockCache:  blockCache,
@@ -1108,21 +1133,22 @@ func (s *state) loadCurrentValidators() error {
 			return err
 		}
 
-		uptimeBytes := validatorIt.Value()
-		uptime := &uptimeAndReward{
+		metadataBytes := validatorIt.Value()
+		metadata := &validatorMetadata{
 			txID: txID,
+			// Note: we don't provide [LastUpdated] here because we expect it to
+			// always be present on disk.
 		}
-		if _, err := txs.Codec.Unmarshal(uptimeBytes, uptime); err != nil {
+		if err := parseValidatorMetadata(metadataBytes, metadata); err != nil {
 			return err
 		}
-		uptime.lastUpdated = time.Unix(int64(uptime.LastUpdated), 0)
 
 		stakerTx, ok := tx.Unsigned.(txs.Staker)
 		if !ok {
 			return fmt.Errorf("expected tx type txs.Staker but got %T", tx.Unsigned)
 		}
 
-		staker, err := NewCurrentStaker(txID, stakerTx, uptime.PotentialReward)
+		staker, err := NewCurrentStaker(txID, stakerTx, metadata.PotentialReward)
 		if err != nil {
 			return err
 		}
@@ -1132,7 +1158,7 @@ func (s *state) loadCurrentValidators() error {
 
 		s.currentStakers.stakers.ReplaceOrInsert(staker)
 
-		s.validatorUptimes.LoadUptime(staker.NodeID, staker.SubnetID, uptime)
+		s.validatorState.LoadValidatorMetadata(staker.NodeID, staker.SubnetID, metadata)
 	}
 
 	subnetValidatorIt := s.currentSubnetValidatorList.NewIterator()
@@ -1153,34 +1179,18 @@ func (s *state) loadCurrentValidators() error {
 			return fmt.Errorf("expected tx type txs.Staker but got %T", tx.Unsigned)
 		}
 
-		uptimeReward := &uptimeAndReward{
+		metadataBytes := subnetValidatorIt.Value()
+		metadata := &validatorMetadata{
 			txID: txID,
 			// use the start time as the fallback value
 			// in case it's not stored in the database
 			LastUpdated: uint64(stakerTx.StartTime().Unix()),
 		}
-		// Permissioned validators originally wrote their values as nil.
-		// With Banff we wrote the potential reward.
-		// We now write the uptime and reward together.
-		storedBytes := subnetValidatorIt.Value()
-		switch len(storedBytes) {
-		// no uptime or potential reward was stored
-		case 0:
-		// potential reward was stored and uptime was not
-		case database.Uint64Size:
-			uptimeReward.PotentialReward, err = database.ParseUInt64(storedBytes)
-			if err != nil {
-				return err
-			}
-		// both uptime and potential reward were stored
-		default:
-			if _, err := txs.Codec.Unmarshal(storedBytes, uptimeReward); err != nil {
-				return err
-			}
+		if err := parseValidatorMetadata(metadataBytes, metadata); err != nil {
+			return err
 		}
-		uptimeReward.lastUpdated = time.Unix(int64(uptimeReward.LastUpdated), 0)
 
-		staker, err := NewCurrentStaker(txID, stakerTx, uptimeReward.PotentialReward)
+		staker, err := NewCurrentStaker(txID, stakerTx, metadata.PotentialReward)
 		if err != nil {
 			return err
 		}
@@ -1189,7 +1199,7 @@ func (s *state) loadCurrentValidators() error {
 
 		s.currentStakers.stakers.ReplaceOrInsert(staker)
 
-		s.validatorUptimes.LoadUptime(staker.NodeID, staker.SubnetID, uptimeReward)
+		s.validatorState.LoadValidatorMetadata(staker.NodeID, staker.SubnetID, metadata)
 	}
 
 	delegatorIt := s.currentDelegatorList.NewIterator()
@@ -1348,6 +1358,9 @@ func (s *state) initValidatorSets() error {
 		return err
 	}
 
+	vl := validators.NewLogger(s.ctx.Log, s.bootstrapped, constants.PrimaryNetworkID, s.ctx.NodeID)
+	primaryValidators.RegisterCallbackListener(vl)
+
 	s.metrics.SetLocalStake(primaryValidators.GetWeight(s.ctx.NodeID))
 	s.metrics.SetTotalStake(primaryValidators.Weight())
 
@@ -1361,6 +1374,9 @@ func (s *state) initValidatorSets() error {
 		if !s.cfg.Validators.Add(subnetID, subnetValidators) {
 			return fmt.Errorf("%w: %s", errDuplicateValidatorSet, subnetID)
 		}
+
+		vl := validators.NewLogger(s.ctx.Log, s.bootstrapped, subnetID, s.ctx.NodeID)
+		subnetValidators.RegisterCallbackListener(vl)
 	}
 	return nil
 }
@@ -1371,7 +1387,7 @@ func (s *state) write(updateValidators bool, height uint64) error {
 		s.writeBlocks(),
 		s.writeCurrentStakers(updateValidators, height),
 		s.writePendingStakers(),
-		s.WriteUptimes(s.currentValidatorList, s.currentSubnetValidatorList), // Must be called after writeCurrentStakers
+		s.WriteValidatorMetadata(s.currentValidatorList, s.currentSubnetValidatorList), // Must be called after writeCurrentStakers
 		s.writeTXs(),
 		s.writeRewardUTXOs(),
 		s.writeUTXOs(),
@@ -1513,7 +1529,10 @@ func (s *state) writeBlocks() error {
 		}
 
 		delete(s.addedBlocks, blkID)
-		s.blockCache.Put(blkID, &stBlk)
+		// Note: Evict is used rather than Put here because stBlk may end up
+		// referencing additional data (because of shared byte slices) that
+		// would not be properly accounted for in the cache sizing.
+		s.blockCache.Evict(blkID)
 		if err := s.blockDB.Put(blkID[:], blockBytes); err != nil {
 			return fmt.Errorf("failed to write block %s: %w", blkID, err)
 		}
@@ -1599,25 +1618,29 @@ func (s *state) writeCurrentStakers(updateValidators bool, height uint64) error 
 				weightDiff.Amount = staker.Weight
 
 				// The validator is being added.
-				vdr := &uptimeAndReward{
+				//
+				// Invariant: It's impossible for a delegator to have been
+				// rewarded in the same block that the validator was added.
+				metadata := &validatorMetadata{
 					txID:        staker.TxID,
 					lastUpdated: staker.StartTime,
 
-					UpDuration:      0,
-					LastUpdated:     uint64(staker.StartTime.Unix()),
-					PotentialReward: staker.PotentialReward,
+					UpDuration:               0,
+					LastUpdated:              uint64(staker.StartTime.Unix()),
+					PotentialReward:          staker.PotentialReward,
+					PotentialDelegateeReward: 0,
 				}
 
-				vdrBytes, err := blocks.GenesisCodec.Marshal(blocks.Version, vdr)
+				metadataBytes, err := blocks.GenesisCodec.Marshal(blocks.Version, metadata)
 				if err != nil {
 					return fmt.Errorf("failed to serialize current validator: %w", err)
 				}
 
-				if err = validatorDB.Put(staker.TxID[:], vdrBytes); err != nil {
+				if err = validatorDB.Put(staker.TxID[:], metadataBytes); err != nil {
 					return fmt.Errorf("failed to write current validator to list: %w", err)
 				}
 
-				s.validatorUptimes.LoadUptime(nodeID, subnetID, vdr)
+				s.validatorState.LoadValidatorMetadata(nodeID, subnetID, metadata)
 			case deleted:
 				staker := validatorDiff.validator
 				weightDiff.Amount = staker.Weight
@@ -1638,7 +1661,7 @@ func (s *state) writeCurrentStakers(updateValidators bool, height uint64) error 
 					return fmt.Errorf("failed to delete current staker: %w", err)
 				}
 
-				s.validatorUptimes.DeleteUptime(nodeID, subnetID)
+				s.validatorState.DeleteValidatorMetadata(nodeID, subnetID)
 			}
 
 			err := writeCurrentDelegatorDiff(
@@ -1824,7 +1847,10 @@ func (s *state) writeTXs() error {
 		}
 
 		delete(s.addedTxs, txID)
-		s.txCache.Put(txID, txStatus)
+		// Note: Evict is used rather than Put here because stx may end up
+		// referencing additional data (because of shared byte slices) that
+		// would not be properly accounted for in the cache sizing.
+		s.txCache.Evict(txID)
 		if err := s.txDB.Put(txID[:], txBytes); err != nil {
 			return fmt.Errorf("failed to add tx: %w", err)
 		}
@@ -1887,7 +1913,10 @@ func (s *state) writeTransformedSubnets() error {
 		txID := tx.ID()
 
 		delete(s.transformedSubnets, subnetID)
-		s.transformedSubnetCache.Put(subnetID, tx)
+		// Note: Evict is used rather than Put here because tx may end up
+		// referencing additional data (because of shared byte slices) that
+		// would not be properly accounted for in the cache sizing.
+		s.transformedSubnetCache.Evict(subnetID)
 		if err := database.PutID(s.transformedSubnetDB, subnetID[:], txID); err != nil {
 			return fmt.Errorf("failed to write transformed subnet: %w", err)
 		}

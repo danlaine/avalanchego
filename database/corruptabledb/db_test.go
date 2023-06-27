@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package corruptabledb
@@ -55,8 +55,7 @@ func TestCorruption(t *testing.T) {
 			corruptableBatch := db.NewBatch()
 			require.NotNil(t, corruptableBatch)
 
-			err := corruptableBatch.Put(key, value)
-			require.NoError(t, err)
+			require.NoError(t, corruptableBatch.Put(key, value))
 
 			return corruptableBatch.Write()
 		},

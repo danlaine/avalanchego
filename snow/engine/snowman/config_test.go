@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package snowman
@@ -19,15 +19,14 @@ func DefaultConfigs() Config {
 		Validators: validators.NewSet(),
 		VM:         &block.TestVM{},
 		Params: snowball.Parameters{
-			K:                       1,
-			Alpha:                   1,
-			BetaVirtuous:            1,
-			BetaRogue:               2,
-			ConcurrentRepolls:       1,
-			OptimalProcessing:       100,
-			MaxOutstandingItems:     1,
-			MaxItemProcessingTime:   1,
-			MixedQueryNumPushNonVdr: 1,
+			K:                     1,
+			Alpha:                 1,
+			BetaVirtuous:          1,
+			BetaRogue:             2,
+			ConcurrentRepolls:     1,
+			OptimalProcessing:     100,
+			MaxOutstandingItems:   1,
+			MaxItemProcessingTime: 1,
 		},
 		Consensus: &snowman.Topological{},
 	}

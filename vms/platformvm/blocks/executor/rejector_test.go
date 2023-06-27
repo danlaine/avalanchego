@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
@@ -147,8 +147,7 @@ func TestRejectBlock(t *testing.T) {
 				state.EXPECT().Commit().Return(nil).Times(1),
 			)
 
-			err = tt.rejectFunc(rejector, blk)
-			require.NoError(err)
+			require.NoError(tt.rejectFunc(rejector, blk))
 			// Make sure block and its parent are removed from the state map.
 			require.NotContains(rejector.blkIDToState, blk.ID())
 		})

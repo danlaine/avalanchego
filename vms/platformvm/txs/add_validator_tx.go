@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package txs
@@ -119,7 +119,7 @@ func (tx *AddValidatorTx) SyntacticVerify(ctx *snow.Context) error {
 
 		assetID := out.AssetID()
 		if assetID != ctx.AVAXAssetID {
-			return fmt.Errorf("stake output must be AVAX but is %q", assetID)
+			return fmt.Errorf("%w but is %q", errStakeMustBeAVAX, assetID)
 		}
 	}
 

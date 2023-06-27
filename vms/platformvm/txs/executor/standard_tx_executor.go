@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
@@ -38,11 +38,11 @@ type StandardTxExecutor struct {
 }
 
 func (*StandardTxExecutor) AdvanceTimeTx(*txs.AdvanceTimeTx) error {
-	return errWrongTxType
+	return ErrWrongTxType
 }
 
 func (*StandardTxExecutor) RewardValidatorTx(*txs.RewardValidatorTx) error {
-	return errWrongTxType
+	return ErrWrongTxType
 }
 
 func (e *StandardTxExecutor) CreateChainTx(tx *txs.CreateChainTx) error {

@@ -1,4 +1,4 @@
-// Copyright (C) 2019-2022, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2019-2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE for licensing terms.
 
 package executor
@@ -49,17 +49,14 @@ import (
 	"github.com/ava-labs/avalanchego/vms/secp256k1fx"
 )
 
-const (
-	testNetworkID = 10 // To be used in tests
-	defaultWeight = 10000
-)
+const defaultWeight = 5 * units.MilliAvax
 
 var (
 	defaultMinStakingDuration = 24 * time.Hour
 	defaultMaxStakingDuration = 365 * 24 * time.Hour
 	defaultGenesisTime        = time.Date(1997, 1, 1, 0, 0, 0, 0, time.UTC)
 	defaultValidateStartTime  = defaultGenesisTime
-	defaultValidateEndTime    = defaultValidateStartTime.Add(10 * defaultMinStakingDuration)
+	defaultValidateEndTime    = defaultValidateStartTime.Add(20 * defaultMinStakingDuration)
 	defaultMinValidatorStake  = 5 * units.MilliAvax
 	defaultBalance            = 100 * defaultMinValidatorStake
 	preFundedKeys             = secp256k1.TestKeys()
@@ -112,30 +109,30 @@ func (e *environment) SetState(blkID ids.ID, chainState state.Chain) {
 	e.states[blkID] = chainState
 }
 
-func newEnvironment(postBanff bool) *environment {
+func newEnvironment(postBanff, postCortina bool) *environment {
 	var isBootstrapped utils.Atomic[bool]
 	isBootstrapped.Set(true)
 
-	config := defaultConfig(postBanff)
-	clk := defaultClock(postBanff)
+	config := defaultConfig(postBanff, postCortina)
+	clk := defaultClock(postBanff || postCortina)
 
 	baseDBManager := manager.NewMemDB(version.CurrentDatabase)
 	baseDB := versiondb.New(baseDBManager.Current().Database)
 	ctx, msm := defaultCtx(baseDB)
 
-	fx := defaultFx(&clk, ctx.Log, isBootstrapped.Get())
+	fx := defaultFx(clk, ctx.Log, isBootstrapped.Get())
 
 	rewards := reward.NewCalculator(config.RewardConfig)
 	baseState := defaultState(&config, ctx, baseDB, rewards)
 
 	atomicUTXOs := avax.NewAtomicUTXOManager(ctx.SharedMemory, txs.Codec)
 	uptimes := uptime.NewManager(baseState)
-	utxoHandler := utxo.NewHandler(ctx, &clk, fx)
+	utxoHandler := utxo.NewHandler(ctx, clk, fx)
 
 	txBuilder := builder.New(
 		ctx,
 		&config,
-		&clk,
+		clk,
 		fx,
 		baseState,
 		atomicUTXOs,
@@ -145,7 +142,7 @@ func newEnvironment(postBanff bool) *environment {
 	backend := Backend{
 		Config:       &config,
 		Ctx:          ctx,
-		Clk:          &clk,
+		Clk:          clk,
 		Bootstrapped: &isBootstrapped,
 		Fx:           fx,
 		FlowChecker:  utxoHandler,
@@ -156,7 +153,7 @@ func newEnvironment(postBanff bool) *environment {
 	env := &environment{
 		isBootstrapped: &isBootstrapped,
 		config:         &config,
-		clk:            &clk,
+		clk:            clk,
 		baseDB:         baseDB,
 		ctx:            ctx,
 		msm:            msm,
@@ -212,7 +209,9 @@ func addSubnet(
 	}
 
 	stateDiff.AddTx(testSubnet1, status.Committed)
-	stateDiff.Apply(env.state)
+	if err := stateDiff.Apply(env.state); err != nil {
+		panic(err)
+	}
 }
 
 func defaultState(
@@ -230,6 +229,7 @@ func defaultState(
 		ctx,
 		metrics.Noop,
 		rewards,
+		&utils.Atomic[bool]{},
 	)
 	if err != nil {
 		panic(err)
@@ -237,10 +237,6 @@ func defaultState(
 
 	// persist and reload to init a bunch of in-memory stuff
 	state.SetHeight(0)
-	if err := state.Commit(); err != nil {
-		panic(err)
-	}
-	state.SetHeight( /*height*/ 0)
 	if err := state.Commit(); err != nil {
 		panic(err)
 	}
@@ -280,10 +276,14 @@ func defaultCtx(db database.Database) (*snow.Context, *mutableSharedMemory) {
 	return ctx, msm
 }
 
-func defaultConfig(postBanff bool) config.Config {
+func defaultConfig(postBanff, postCortina bool) config.Config {
 	banffTime := mockable.MaxTime
 	if postBanff {
 		banffTime = defaultValidateEndTime.Add(-2 * time.Second)
+	}
+	cortinaTime := mockable.MaxTime
+	if postCortina {
+		cortinaTime = defaultValidateStartTime.Add(-2 * time.Second)
 	}
 
 	vdrs := validators.NewManager()
@@ -310,16 +310,17 @@ func defaultConfig(postBanff bool) config.Config {
 		ApricotPhase3Time: defaultValidateEndTime,
 		ApricotPhase5Time: defaultValidateEndTime,
 		BanffTime:         banffTime,
+		CortinaTime:       cortinaTime,
 	}
 }
 
-func defaultClock(postBanff bool) mockable.Clock {
+func defaultClock(postFork bool) *mockable.Clock {
 	now := defaultGenesisTime
-	if postBanff {
+	if postFork {
 		// 1 second after Banff fork
 		now = defaultValidateEndTime.Add(-2 * time.Second)
 	}
-	clk := mockable.Clock{}
+	clk := &mockable.Clock{}
 	clk.Set(now)
 	return clk
 }
@@ -362,10 +363,9 @@ func defaultFx(clk *mockable.Clock, log logging.Logger, isBootstrapped bool) fx.
 
 func buildGenesisTest(ctx *snow.Context) []byte {
 	genesisUTXOs := make([]api.UTXO, len(preFundedKeys))
-	hrp := constants.NetworkIDToHRP[testNetworkID]
 	for i, key := range preFundedKeys {
 		id := key.PublicKey().Address()
-		addr, err := address.FormatBech32(hrp, id.Bytes())
+		addr, err := address.FormatBech32(constants.UnitTestHRP, id.Bytes())
 		if err != nil {
 			panic(err)
 		}
@@ -378,7 +378,7 @@ func buildGenesisTest(ctx *snow.Context) []byte {
 	genesisValidators := make([]api.PermissionlessValidator, len(preFundedKeys))
 	for i, key := range preFundedKeys {
 		nodeID := ids.NodeID(key.PublicKey().Address())
-		addr, err := address.FormatBech32(hrp, nodeID.Bytes())
+		addr, err := address.FormatBech32(constants.UnitTestHRP, nodeID.Bytes())
 		if err != nil {
 			panic(err)
 		}
@@ -401,7 +401,7 @@ func buildGenesisTest(ctx *snow.Context) []byte {
 	}
 
 	buildGenesisArgs := api.BuildGenesisArgs{
-		NetworkID:     json.Uint32(testNetworkID),
+		NetworkID:     json.Uint32(constants.UnitTestID),
 		AvaxAssetID:   ctx.AVAXAssetID,
 		UTXOs:         genesisUTXOs,
 		Validators:    genesisValidators,
